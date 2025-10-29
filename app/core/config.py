@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     DEV: bool = True
     PRODUCTION_URL: str = ""
     DEBUG: bool = True
+    MONGO_DB_URL: str = ""
+    MONGO_DB_NAME: str = ""
     model_config = SettingsConfigDict(env_file=".env")
 
 

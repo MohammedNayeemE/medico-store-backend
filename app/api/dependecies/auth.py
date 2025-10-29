@@ -8,11 +8,18 @@ from jose import JWTError, jwt
 from passlib.context import CryptContext
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.api.dependecies.get_db_sessions import get_postgres
 from app.core.config import settings
 from app.core.database import async_session
-from app.models.user_management_models import Permission, RevokedToken, Session, User
+from app.models.user_management_models import (
+    Permission,
+    RevokedToken,
+    Role,
+    Session,
+    User,
+)
 
 A_SECRET_KEY = settings.ACCESS_SECRET_TOKEN
 R_SECRET_KEY = settings.REFRESH_SECRET_TOKEN
@@ -29,7 +36,15 @@ async def load_scopes_from_db():
         return {perm.name: perm.description for perm in permissions}
 
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/token", scopes={})
+oauth2_scheme = OAuth2PasswordBearer(
+    tokenUrl="/auth/admin/token",
+    scopes={
+        "admin:read": "Read roles",
+        "admin:write": "Write roles",
+        "user:read": "Read admin profile",
+        "user:write": "Write admin profile",
+    },
+)
 
 
 def verify_password(plain: str, hashed: str) -> bool:
@@ -65,8 +80,11 @@ def create_refresh_token(user: User) -> Tuple[str, datetime]:
 
 
 async def is_token_revoked(db: AsyncSession, jti: str) -> bool:
-    result = await db.execute(select(RevokedToken).where(RevokedToken.jti == jti))
-    return result.scalar_one_or_none() is not None
+    result = await db.execute(select(RevokedToken).filter(RevokedToken.jti == jti))
+    obj = result.scalars().all()
+    if not obj:
+        return False
+    return True
 
 
 async def revoke_token(db: AsyncSession, jti: str):
@@ -86,16 +104,13 @@ async def get_current_user(
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": authenticate_value},
     )
-
     try:
         payload = jwt.decode(token, A_SECRET_KEY, algorithms=[ALGORITHM])
         user_id = payload.get("sub")
         token_scopes = payload.get("scopes", [])
         jti = payload.get("jti")
-
         if user_id is None or jti is None:
             raise credentials_exception
-
         user_id = int(user_id)
     except JWTError:
         raise credentials_exception
@@ -106,7 +121,11 @@ async def get_current_user(
             detail="Token has been revoked. Please log in again.",
         )
 
-    result = await db.execute(select(User).where(User.user_id == user_id))
+    result = await db.execute(
+        select(User)
+        .options(selectinload(User.role).selectinload(Role.permissions))
+        .filter(User.user_id == user_id)
+    )
     user = result.scalar_one_or_none()
     if not user:
         raise credentials_exception

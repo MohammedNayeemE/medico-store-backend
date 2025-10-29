@@ -113,3 +113,14 @@ class AddressResponse(BaseModel):
     pincode: str
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str = Field(..., description="Reset token sent to user's email")
+    new_password: str = Field(
+        ..., min_length=8, description="New password for the user"
+    )

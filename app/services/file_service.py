@@ -1,0 +1,72 @@
+from bson import ObjectId
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi.responses import JSONResponse, StreamingResponse
+from motor.motor_asyncio import AsyncIOMotorGridFSBucket
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.database import bucket
+from app.models.user_management_models import FileAsset, User
+
+
+class FileService:
+    def __init__(self) -> None:
+        pass
+
+    async def UPLOAD_SINGLE_FILE(
+        self,
+        bucket: AsyncIOMotorGridFSBucket,
+        db: AsyncSession,
+        file: UploadFile,
+        user_id: int,
+    ) -> JSONResponse | None:
+        try:
+            result = await db.execute(select(User).filter(User.user_id == user_id))
+            user_obj = result.scalar_one_or_none()
+            if not user_obj:
+                raise HTTPException(status_code=404, detail="user-id not found")
+            grid_file_id = await bucket.upload_from_stream(
+                file.filename, file.file, metadata={"content_type": file.content_type}
+            )
+            file_url: str = str(grid_file_id)
+            asset = FileAsset(
+                file_name=file.filename,
+                file_url=file_url,
+                file_type=file.content_type,
+                uploaded_by=user_obj.user_id,
+                size_bytes=file.size,
+            )
+            db.add(asset)
+            await db.commit()
+            await db.refresh(asset)
+
+            return JSONResponse(
+                status_code=201,
+                content={"asset_id": asset.asset_id, "file_id": file_url},
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"[upload_single_file]: {e}")
+            raise HTTPException(
+                status_code=500, detail="internal server error : [upload_single_file]"
+            )
+
+    async def DOWNLOAD_SINGLE_FILE(
+        self, bucket: AsyncIOMotorGridFSBucket, file_id: str
+    ):
+        try:
+            grid_out = await bucket.open_download_stream(ObjectId(file_id))
+            return StreamingResponse(
+                grid_out,
+                media_type=grid_out.metadata.get(
+                    "content_type", "application/octet-stream"
+                ),
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"[download_single_file] : {e}")
+            raise HTTPException(
+                status_code=500, detail="internal server error : [download_single_file]"
+            )

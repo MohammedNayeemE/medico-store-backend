@@ -30,7 +30,9 @@ class Role(Base):
 
     # Relationships
     users = relationship("User", back_populates="role")
-    permissions = relationship("RolePermission", back_populates="role")
+    permissions = relationship(
+        "Permission", secondary="role_permissions", back_populates="roles"
+    )
 
 
 class Permission(Base):
@@ -43,7 +45,9 @@ class Permission(Base):
     deleted_at = Column(DateTime(timezone=True))
     deleted_by = Column(Integer)
 
-    roles = relationship("RolePermission", back_populates="permission")
+    roles = relationship(
+        "Role", secondary="role_permissions", back_populates="permissions"
+    )
 
 
 class User(Base):
@@ -93,10 +97,6 @@ class RolePermission(Base):
     is_deleted = Column(Boolean, nullable=False, default=False)
     deleted_at = Column(DateTime(timezone=True))
     deleted_by = Column(Integer)
-
-    # Relationships
-    role = relationship("Role", back_populates="permissions")
-    permission = relationship("Permission", back_populates="roles")
 
 
 class Session(Base):
@@ -206,3 +206,13 @@ class AddressType(Base):
     deleted_by = Column(Integer)
 
     addresses = relationship("Address", back_populates="address_type")
+
+
+class PasswordReset(Base):
+    __tablename__ = "password_reset"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.user_id", ondelete="CASCADE"))
+    token = Column(String(255), unique=True, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    used = Column(Boolean, default=False)

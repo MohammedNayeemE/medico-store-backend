@@ -1,0 +1,9 @@
+- [x] auth
+- [x] inventory
+- [] order 
+- [] payment
+- [] notification
+- [] report
+- [] content
+- [] backup
+- [] client
