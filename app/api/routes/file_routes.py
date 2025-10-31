@@ -1,4 +1,5 @@
 import json
+from typing import List
 
 from bson import ObjectId
 from fastapi import APIRouter, Depends, File, HTTPException, Path, Request, UploadFile
@@ -18,7 +19,9 @@ async def get_dev_route():
     return JSONResponse(status_code=200, content={"msg": "this route is working...."})
 
 
-@router.post("/uploadfile/{user_id}", description="Upload a file for a given user and store it")
+@router.post(
+    "/uploadfile/{user_id}", description="Upload a file for a given user and store it"
+)
 async def upload_file(
     user_id: int = Path(...),
     file: UploadFile = File(...),
@@ -33,4 +36,27 @@ async def upload_file(
 @router.get("/downloadfile/{file_id}", description="Download/stream a file by its ID")
 async def downloadfile(file_id: str):
     result = await file_manager.DOWNLOAD_SINGLE_FILE(bucket=bucket, file_id=file_id)
+    return result
+
+
+@router.post("/upload-multiple-files/{user_id}")
+async def upload_multiple_files(
+    user_id: int = Path(...),
+    files: List[UploadFile] = File(...),
+    db: AsyncSession = Depends(get_postgres),
+):
+    result = await file_manager.UPLOAD_MULTIPLE_FILES(
+        bucket=bucket, db=db, files=files, user_id=user_id
+    )
+    return result
+
+
+@router.post("/download-multiple-files")
+async def download_multiple_files(
+    file_ids: List[str],
+    db: AsyncSession = Depends(get_postgres),
+):
+    result = await file_manager.DOWNLOAD_MULTIPLE_FILES(
+        bucket=bucket, file_ids=file_ids
+    )
     return result

@@ -1,9 +1,13 @@
+from enum import Enum
+
 from sqlalchemy import (
+    TIMESTAMP,
     BigInteger,
     Boolean,
     Column,
     Date,
     DateTime,
+    Enum,
     ForeignKey,
     Index,
     Integer,
@@ -16,6 +20,7 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
 from app.core.database import Base
+from app.models.enums import ReviewStatusEnum
 
 
 class Role(Base):
@@ -216,3 +221,32 @@ class PasswordReset(Base):
     token = Column(String(255), unique=True, nullable=False)
     expires_at = Column(DateTime, nullable=False)
     used = Column(Boolean, default=False)
+
+
+class Review(Base):
+    __tablename__ = "reviews"
+
+    review_id = Column(Integer, primary_key=True, autoincrement=True)
+    customer_id = Column(
+        Integer, ForeignKey("users.user_id", onupdate="CASCADE"), nullable=False
+    )
+    medicine_id = Column(
+        Integer, ForeignKey("medicines.medicine_id", onupdate="CASCADE"), nullable=False
+    )
+    rating = Column(Integer, nullable=False)
+    review_text = Column(Text)
+    status = Column(
+        Enum(ReviewStatusEnum, name="review_status"),
+        nullable=False,
+        server_default=ReviewStatusEnum.visible.value,
+    )
+    created_at = Column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at = Column(TIMESTAMP(timezone=True))
+    is_deleted = Column(Boolean, default=False)
+    deleted_at = Column(TIMESTAMP)
+    deleted_by = Column(Integer, ForeignKey("users.user_id", onupdate="CASCADE"))
+
+    customer = relationship("User")
+    medicine = relationship("Medicine")

@@ -21,6 +21,15 @@ class MedicineCreate(BaseModel):
     alternative_ids: Optional[List[int]] = []
 
 
+class MedicineImageCreate(BaseModel):
+    medicine_id: int
+    file_asset_id: int
+
+
+class MedicineImageResponse(MedicineImageCreate):
+    id: int
+
+
 class MedicineResponse(MedicineCreate):
     medicine_id: int
     created_at: datetime
@@ -90,3 +99,9 @@ class GSTSlabCreate(BaseModel):
 class GSTSlabResponse(GSTSlabCreate):
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class VerifyPrescription(BaseModel):
+    prescription_id: int
+    is_verified: bool
+    notes: Optional[str]

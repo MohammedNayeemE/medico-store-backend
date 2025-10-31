@@ -15,8 +15,12 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from app.api.dependecies.get_db_sessions import get_postgres
 from app.api.routes import (
     auth_routes,
+    discount_routes,
     file_routes,
     inventory_routes,
+    issues_routes,
+    order_routes,
+    payment_routes,
     profile_routes,
     role_routes,
 )
@@ -24,6 +28,7 @@ from app.core.config import allowed_origins, settings
 from app.core.database import Base, engine
 from app.middlewares.logging_middleware import LoggingMiddleware
 from app.models.inventory_management_models import *
+from app.models.order_management_models import *
 from app.models.user_management_models import *
 from app.services.auth_service import AuthService
 
@@ -134,3 +139,7 @@ app.include_router(router=profile_routes.router)
 app.include_router(router=role_routes.router)
 app.include_router(router=file_routes.router)
 app.include_router(router=inventory_routes.router)
+app.include_router(router=order_routes.router)
+app.include_router(router=issues_routes.router)
+app.include_router(router=payment_routes.router)
+app.include_router(router=discount_routes.router)

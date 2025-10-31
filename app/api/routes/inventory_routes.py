@@ -1,11 +1,12 @@
 from typing import List, Optional
 
-from fastapi import APIRouter, Body, Depends, Path, Query, Security
+from fastapi import APIRouter, Body, Depends, File, Path, Query, Security, UploadFile
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependecies.auth import get_current_user, oauth2_scheme
 from app.api.dependecies.get_db_sessions import get_postgres
+from app.core.database import bucket
 from app.models.user_management_models import User
 from app.schemas.inventory_schemas import (
     AlternativeCreate,
@@ -16,10 +17,12 @@ from app.schemas.inventory_schemas import (
     SideEffectCreate,
     TagCreate,
 )
+from app.services.file_service import FileService
 from app.services.inventory_service import InventoryManagementService
 
 router = APIRouter(prefix="/inventory", tags=["Inventory"])
 inventory_manager = InventoryManagementService()
+file_manager = FileService()
 
 medicine_router = APIRouter(prefix="/medicines", tags=["Medicines"])
 category_router = APIRouter(prefix="/categories", tags=["Categories"])
@@ -33,6 +36,25 @@ gst_router = APIRouter(prefix="/gst-slabs", tags=["GST Slabs"])
 @router.get("/dev", description="Health check endpoint for Inventory routes")
 async def get_root_dev():
     return JSONResponse(status_code=200, content={"msg": "this route is working"})
+
+
+@medicine_router.post(
+    "/upload-single-image/{medicine_id}", description="Upload a single medicine image"
+)
+async def upload_single_image(
+    current_user: User = Security(get_current_user, scopes=["admin:write"]),
+    db: AsyncSession = Depends(get_postgres),
+    file: UploadFile = File(...),
+    medicine_id: int = Path(...),
+):
+    result = await inventory_manager.UPLOAD_MEDICINE_IMAGE(
+        db=db,
+        user_id=current_user.user_id,
+        file=file,
+        bucket=bucket,
+        medicine_id=medicine_id,
+    )
+    return result
 
 
 @medicine_router.post("/", description="Create a new medicine entry")

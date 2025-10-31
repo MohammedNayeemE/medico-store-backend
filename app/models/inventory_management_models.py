@@ -5,6 +5,7 @@ from sqlalchemy import (
     Column,
     Date,
     DateTime,
+    Enum,
     ForeignKey,
     Index,
     Integer,
@@ -18,6 +19,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import relationship
 
 from app.core.database import Base
+from app.models.enums import PrescriptionStatusEnum
 
 
 class Category(Base):
@@ -134,6 +136,22 @@ class Medicine(Base):
     batches = relationship("MedicineBatch", back_populates="medicine")
 
 
+class MedicineImage(Base):
+    __tablename__ = "medicine_images"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    medicine_id = Column(
+        Integer, ForeignKey("medicines.medicine_id", ondelete="CASCADE"), nullable=False
+    )
+    file_asset_id = Column(
+        Integer, ForeignKey("file_assets.asset_id", ondelete="CASCADE"), nullable=False
+    )
+
+    # Relationships
+    medicine = relationship("Medicine", back_populates="images")
+    file_asset = relationship("FileAsset")
+
+
 class MedicineCategory(Base):
     __tablename__ = "medicine_categories"
 
@@ -235,3 +253,94 @@ class FamilyMember(Base):
     gender = Column(String(1), nullable=False)
     dob = Column(Date, nullable=False)
     user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
+
+
+class Prescription(Base):
+    __tablename__ = "prescriptions"
+
+    prescription_id = Column(Integer, primary_key=True, autoincrement=True)
+    customer_id = Column(
+        Integer, ForeignKey("users.user_id", onupdate="CASCADE"), nullable=False
+    )
+    asset_id = Column(
+        Integer, ForeignKey("file_assets.asset_id", onupdate="CASCADE"), nullable=False
+    )
+    status = Column(
+        Enum(PrescriptionStatusEnum, name="prescription_status_enum"),
+        nullable=False,
+        server_default=PrescriptionStatusEnum.pending.value,
+    )
+    verified_by = Column(Integer, ForeignKey("users.user_id", onupdate="CASCADE"))
+    uploaded_at = Column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    verified_at = Column(TIMESTAMP(timezone=True))
+    is_deleted = Column(Boolean, default=False)
+    deleted_at = Column(TIMESTAMP)
+    deleted_by = Column(Integer, ForeignKey("users.user_id", onupdate="CASCADE"))
+
+    customer = relationship("User")
+    asset = relationship("FileAsset")
+    verified_user = relationship("User", foreign_keys=[verified_by])
+    prescription_items = relationship("PrescriptionItem", back_populates="prescription")
+
+
+class PrescriptionItem(Base):
+    __tablename__ = "prescription_items"
+
+    pi_id = Column(Integer, primary_key=True, autoincrement=True)
+    prescription_id = Column(
+        Integer,
+        ForeignKey("prescriptions.prescription_id", onupdate="CASCADE"),
+        nullable=False,
+    )
+    medicine_id = Column(
+        Integer, ForeignKey("medicines.medicine_id", onupdate="CASCADE"), nullable=False
+    )
+    is_deleted = Column(Boolean, default=False)
+    deleted_at = Column(TIMESTAMP)
+    deleted_by = Column(Integer, ForeignKey("users.user_id", onupdate="CASCADE"))
+
+    prescription = relationship("Prescription", back_populates="prescription_items")
+    medicine = relationship("Medicine")
+
+
+class Cart(Base):
+    __tablename__ = "carts"
+
+    cart_id = Column(Integer, primary_key=True, autoincrement=True)
+    customer_id = Column(
+        Integer, ForeignKey("users.user_id", onupdate="CASCADE"), nullable=False
+    )
+    created_at = Column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at = Column(TIMESTAMP(timezone=True))
+    is_deleted = Column(Boolean, default=False)
+    deleted_at = Column(TIMESTAMP)
+    deleted_by = Column(Integer, ForeignKey("users.user_id", onupdate="CASCADE"))
+
+    customer = relationship("User")
+    cart_items = relationship("CartItem", back_populates="cart")
+
+
+class CartItem(Base):
+    __tablename__ = "cart_items"
+
+    cart_item_id = Column(Integer, primary_key=True, autoincrement=True)
+    cart_id = Column(
+        Integer, ForeignKey("carts.cart_id", onupdate="CASCADE"), nullable=False
+    )
+    medicine_id = Column(
+        Integer, ForeignKey("medicines.medicine_id", onupdate="CASCADE"), nullable=False
+    )
+    quantity = Column(Integer, nullable=False)
+    added_at = Column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    is_deleted = Column(Boolean, default=False)
+    deleted_at = Column(TIMESTAMP)
+    deleted_by = Column(Integer, ForeignKey("users.user_id", onupdate="CASCADE"))
+
+    cart = relationship("Cart", back_populates="cart_items")
+    medicine = relationship("Medicine")

@@ -1,9 +1,11 @@
+import json
 from datetime import datetime
 from operator import or_
 from typing import Any, Dict, List, Optional
 
-from fastapi import HTTPException
+from fastapi import File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
+from motor.motor_asyncio import AsyncIOMotorGridFSBucket
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
@@ -16,6 +18,7 @@ from app.models.inventory_management_models import (
     MedicineAlternative,
     MedicineBatch,
     MedicineCategory,
+    MedicineImage,
     MedicineSideEffect,
     MedicineTag,
     SideEffect,
@@ -28,16 +31,38 @@ from app.schemas.inventory_schemas import (
     GSTSlabCreate,
     MedicineBatchCreate,
     MedicineCreate,
+    MedicineImageCreate,
     SideEffectCreate,
     SideEffectResponse,
     TagCreate,
     TagReponse,
 )
+from app.services.file_service import FileService
 
 
 class InventoryManagementService:
     def __init__(self) -> None:
-        pass
+        self.file_manager = FileService()
+
+    async def UPLOAD_MEDICINE_IMAGE(
+        self,
+        db: AsyncSession,
+        user_id: int,
+        file: UploadFile,
+        bucket: AsyncIOMotorGridFSBucket,
+        medicine_id: int,
+    ):
+        result = await self.file_manager.UPLOAD_SINGLE_FILE(
+            bucket=bucket, db=db, file=file, user_id=user_id
+        )
+        asset_id = result["asset_id"]
+        new_medicine_image = MedicineImage(
+            medicine_id=medicine_id, file_asset_id=asset_id
+        )
+        db.add(asset_id)
+        await db.commit()
+        await db.refresh(new_medicine_image)
+        return new_medicine_image
 
     async def CREATE_MEDICINE(self, db: AsyncSession, medicine_data: MedicineCreate):
         try:
