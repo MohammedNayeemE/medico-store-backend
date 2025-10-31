@@ -1,6 +1,7 @@
 - [x] auth
 - [x] inventory
-- [] order 
+- [x] order
+    - [] testing
 - [] payment
 - [] notification
 - [] report
