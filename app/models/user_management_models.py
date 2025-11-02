@@ -110,6 +110,7 @@ class Session(Base):
     session_id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
     refresh_token = Column(Text, nullable=False)
+    refresh_token_jti = Column(Text, nullable=False)
     device_info = Column(Text, nullable=False)
     ip_address = Column(INET, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -248,5 +249,18 @@ class Review(Base):
     deleted_at = Column(TIMESTAMP)
     deleted_by = Column(Integer, ForeignKey("users.user_id", onupdate="CASCADE"))
 
-    customer = relationship("User")
+    # ✅ specify which foreign key to use for this relationship
+    customer = relationship(
+        "User",
+        foreign_keys=[customer_id],
+        backref="reviews",  # optional: lets you access user.reviews
+    )
+
+    # You can also relate the deleter if needed:
+    deleted_by_user = relationship(
+        "User",
+        foreign_keys=[deleted_by],
+        backref="deleted_reviews",  # optional
+    )
+
     medicine = relationship("Medicine")

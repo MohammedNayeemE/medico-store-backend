@@ -15,6 +15,14 @@ class Settings(BaseSettings):
     DEBUG: bool = True
     MONGO_DB_URL: str = ""
     MONGO_DB_NAME: str = ""
+    RECAPTCHA_SECRET_KEY: str = ""
+    RECAPTCHA_SITE_KEY: str = ""
+    CAPTCHA_BYPASS: bool = False
+    MAIL_USERNAME: str = ""
+    MAIL_PASSWORD: str = ""
+    MAIL_FROM: str = ""
+    MAIL_PORT: int = 587
+    MAIL_SERVER: str = "smtp.gmail.com"
     model_config = SettingsConfigDict(env_file=".env")
 
 

@@ -1,10 +1,20 @@
 - [x] auth
+    - [x] testing
 - [x] inventory
+    - [] testing
 - [x] order
     - [] testing
-- [] payment
+- [x] payment
+    - [] testing
+- [] invoice 
+    - [] testing
 - [] notification
+    - [] testing
 - [] report
+    - [] testing
 - [] content
+    - [] testing
 - [] backup
+    - [] testing
 - [] client
+    - [] testing

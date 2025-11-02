@@ -47,11 +47,21 @@ class Order(Base):
     deleted_at = Column(TIMESTAMP(timezone=True))
     deleted_by = Column(Integer, ForeignKey("users.user_id", onupdate="CASCADE"))
 
-    # Relationships
-    customer = relationship("User")
+    # ✅ Relationships
+    customer = relationship(
+        "User",
+        foreign_keys=[customer_id],  # 👈 Tell SQLAlchemy which FK to use
+        backref="orders",  # Optional: lets you access user.orders
+    )
+
+    deleted_user = relationship(
+        "User",
+        foreign_keys=[deleted_by],
+        backref="deleted_orders",  # Optional: lets you access user.deleted_orders
+    )
+
     member = relationship("FamilyMember")
     prescription = relationship("Prescription")
-    deleted_user = relationship("User", foreign_keys=[deleted_by])
     order_items = relationship("OrderItem", back_populates="order")
     payments = relationship("Payment", back_populates="order")
     issues = relationship("Issue", back_populates="order")
@@ -86,6 +96,9 @@ class Payment(Base):
     payment_id = Column(Integer, primary_key=True, autoincrement=True)
     order_id = Column(
         Integer, ForeignKey("orders.order_id", onupdate="CASCADE"), nullable=False
+    )
+    user_id = Column(
+        Integer, ForeignKey("users.user_id", onupdate="CASCADE"), nullable=False
     )
     amount = Column(Numeric(12, 2), nullable=False)
     status = Column(

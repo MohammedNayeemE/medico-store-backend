@@ -35,10 +35,21 @@ class UserResponse(UserCreate):
     model_config = ConfigDict(from_attributes=True)
 
 
+class EmployeeCreate(BaseModel):
+    email: EmailStr
+    password: str = Field(..., min_length=6, max_length=20)
+    role_id: int = Field(..., ge=1)
+
+
+class OnBoardEmployee(BaseModel):
+    email: EmailStr
+    password: str = Field(..., min_length=6, max_length=20)
+
+
 class AdminCreate(BaseModel):
     email: EmailStr
-    role_id: int
     password: str = Field(..., min_length=6, max_length=20)
+    captcha_token: Optional[str]
 
 
 class AdminResponse(AdminCreate):

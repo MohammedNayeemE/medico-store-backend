@@ -116,8 +116,14 @@ class Medicine(Base):
     deleted_at = Column(TIMESTAMP)
     deleted_by = Column(Integer, ForeignKey("users.user_id", onupdate="CASCADE"))
 
+    # Relationships
     gst_slab = relationship("GSTSlab", back_populates="medicines")
-    image = relationship("FileAsset")
+    image = relationship("FileAsset")  # Primary image
+    images = relationship(  # 👈 ADD THIS
+        "MedicineImage",
+        back_populates="medicine",
+        cascade="all, delete-orphan",
+    )
 
     categories = relationship(
         "Category", secondary="medicine_categories", back_populates="medicines"
@@ -279,9 +285,26 @@ class Prescription(Base):
     deleted_at = Column(TIMESTAMP)
     deleted_by = Column(Integer, ForeignKey("users.user_id", onupdate="CASCADE"))
 
-    customer = relationship("User")
+    # ✅ Relationships
+    customer = relationship(
+        "User",
+        foreign_keys=[customer_id],  # 👈 specify FK
+        backref="prescriptions",  # optional: allows user.prescriptions
+    )
+
+    verified_user = relationship(
+        "User",
+        foreign_keys=[verified_by],
+        backref="verified_prescriptions",  # optional
+    )
+
+    deleted_user = relationship(
+        "User",
+        foreign_keys=[deleted_by],
+        backref="deleted_prescriptions",  # optional
+    )
+
     asset = relationship("FileAsset")
-    verified_user = relationship("User", foreign_keys=[verified_by])
     prescription_items = relationship("PrescriptionItem", back_populates="prescription")
 
 
@@ -320,7 +343,10 @@ class Cart(Base):
     deleted_at = Column(TIMESTAMP)
     deleted_by = Column(Integer, ForeignKey("users.user_id", onupdate="CASCADE"))
 
-    customer = relationship("User")
+    # 👇 Tell SQLAlchemy which foreign key to use for each relationship
+    customer = relationship("User", foreign_keys=[customer_id])
+    deleted_user = relationship("User", foreign_keys=[deleted_by])
+
     cart_items = relationship("CartItem", back_populates="cart")
 
 

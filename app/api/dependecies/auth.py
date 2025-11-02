@@ -20,13 +20,9 @@ from app.models.user_management_models import (
     Session,
     User,
 )
+from app.services.auth_service import AuthService
 
-A_SECRET_KEY = settings.ACCESS_SECRET_TOKEN
-R_SECRET_KEY = settings.REFRESH_SECRET_TOKEN
-ALGORITHM = settings.ALGORITHM
-ACCESS_TOKEN_EXPIRE_MINUTES = settings.ACCESS_TOKEN_EXPIRES
-REFRESH_TOKEN_EXPIRE_DAYS = settings.REFRESH_TOKEN_EXPIRES
-pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
+auth_manager = AuthService()
 
 
 async def load_scopes_from_db():
@@ -47,52 +43,6 @@ oauth2_scheme = OAuth2PasswordBearer(
 )
 
 
-def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain, hashed)
-
-
-def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
-
-
-def create_access_token(user: User) -> str:
-    jti = str(uuid.uuid4())
-    payload = {
-        "sub": str(user.user_id),
-        "scopes": [perm.name for perm in user.role.permissions],
-        "exp": datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
-        "jti": jti,
-    }
-    return jwt.encode(payload, A_SECRET_KEY, algorithm=ALGORITHM)
-
-
-def create_refresh_token(user: User) -> Tuple[str, datetime]:
-    jti = str(uuid.uuid4())
-    expiration_dt = datetime.utcnow() + timedelta(minutes=REFRESH_TOKEN_EXPIRE_DAYS)
-    payload = {
-        "sub": str(user.user_id),
-        "scopes": [perm.name for perm in user.role.permissions],
-        "exp": expiration_dt,
-        "jti": jti,
-    }
-    encoded_jwt = jwt.encode(payload, R_SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt, expiration_dt
-
-
-async def is_token_revoked(db: AsyncSession, jti: str) -> bool:
-    result = await db.execute(select(RevokedToken).filter(RevokedToken.jti == jti))
-    obj = result.scalars().all()
-    if not obj:
-        return False
-    return True
-
-
-async def revoke_token(db: AsyncSession, jti: str):
-    if not await is_token_revoked(db, jti):
-        db.add(RevokedToken(jti=jti))
-        await db.commit()
-
-
 async def get_current_user(
     security_scopes: SecurityScopes,
     token: str = Depends(oauth2_scheme),
@@ -105,7 +55,9 @@ async def get_current_user(
         headers={"WWW-Authenticate": authenticate_value},
     )
     try:
-        payload = jwt.decode(token, A_SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(
+            token, auth_manager.A_SECRET_KEY, algorithms=[auth_manager.ALGORITHM]
+        )
         user_id = payload.get("sub")
         token_scopes = payload.get("scopes", [])
         jti = payload.get("jti")
@@ -114,13 +66,24 @@ async def get_current_user(
         user_id = int(user_id)
     except JWTError:
         raise credentials_exception
-
-    if await is_token_revoked(db, jti):
+    if await auth_manager.is_token_revoked(db, jti):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token has been revoked. Please log in again.",
         )
-
+    if not jti:
+        raise credentials_exception
+    result = await db.execute(
+        select(Session)
+        .filter(Session.refresh_token_jti == jti)
+        .filter(Session.expires_at > datetime.utcnow())
+    )
+    session = result.scalar_one_or_none()
+    if not session:
+        raise HTTPException(
+            status_code=401,
+            detail="Session expired or invalid. Please log in again.",
+        )
     result = await db.execute(
         select(User)
         .options(selectinload(User.role).selectinload(Role.permissions))
@@ -129,42 +92,13 @@ async def get_current_user(
     user = result.scalar_one_or_none()
     if not user:
         raise credentials_exception
-
     db_permissions = [perm.name for perm in user.role.permissions]
     required_scopes = set(security_scopes.scopes)
     granted_scopes = set(token_scopes) | set(db_permissions)
-
     missing_scopes = required_scopes - granted_scopes
     if missing_scopes:
         raise HTTPException(
             status_code=403,
             detail=f"Missing required permissions: {', '.join(missing_scopes)}",
         )
-
     return user
-
-
-async def rotate_refresh_token(old_token: str, db: AsyncSession) -> str:
-    # result = await db.execute(
-    #     select(RefreshToken)
-    #     .where(RefreshToken.token == old_token)
-    #     .where(RefreshToken.revoked == False)
-    # )
-    # db_token = result.scalar_one_or_none()
-    #
-    # if not db_token:
-    #     raise HTTPException(status_code=401, detail="Invalid refresh token")
-    #
-    # if db_token.expires_at < datetime.utcnow():
-    #     raise HTTPException(status_code=401, detail="Refresh token expired")
-    #
-    # # revoke old token
-    # db_token.revoked = True
-    # await db.commit()
-    #
-    # # issue a new one
-    # result = await db.execute(select(User).where(User.user_id == db_token.user_id))
-    # user = result.scalar_one()
-    # new_token = await create_refresh_token(user, db)
-    # return new_token
-    pass

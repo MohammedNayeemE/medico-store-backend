@@ -1,26 +1,24 @@
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, datetime_CAPI, timedelta
 from typing import Tuple
 
-from fastapi import Depends, HTTPException, Request
+import httpx
+from fastapi import Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from jose import JWTError, jwt
+from jose.exceptions import ExpiredSignatureError
 from passlib.context import CryptContext
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from starlette.types import HTTPExceptionHandler
 
 from app.api.dependecies.get_db_sessions import get_postgres
 from app.core.config import settings
 from app.core.database import otp_store
-from app.models.user_management_models import (
-    PasswordReset,
-    RevokedToken,
-    Role,
-    Session,
-    User,
-)
-from app.schemas.user_schemas import AdminCreate, UserCreate
+from app.models.user_management_models import (PasswordReset, RevokedToken,
+                                               Role, Session, User)
+from app.schemas.user_schemas import AdminCreate, OnBoardEmployee, UserCreate
 
 
 class AuthService:
@@ -32,6 +30,8 @@ class AuthService:
         self.REFRESH_TOKEN_EXPIRE_DAYS = settings.REFRESH_TOKEN_EXPIRES
         self.pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
         self.PASSWORD_RESET_EXPIRE_MINUTES = 15
+        self.CAPTCHA_BYPASS = settings.CAPTCHA_BYPASS
+        self.RECAPTCHA_SECRET_KEY = settings.RECAPTCHA_SECRET_KEY
 
     def verify_password(self, plain: str, hashed: str) -> bool:
         return self.pwd_context.verify(plain, hashed)
@@ -39,18 +39,22 @@ class AuthService:
     def hash_password(self, password: str) -> str:
         return self.pwd_context.hash(password)
 
-    def create_access_token(self, user: User) -> str:
+    async def verify_token(self, token: str, secret_key: str, algorithm: str):
+        payload = jwt.decode(token, secret_key, algorithms=[algorithm])
+        return payload
+
+    def create_access_token(self, user: User, refresh_token_jti: str) -> str:
         jti = str(uuid.uuid4())
         payload = {
             "sub": str(user.user_id),
             "scopes": [perm.name for perm in user.role.permissions],
             "exp": datetime.utcnow()
             + timedelta(minutes=self.ACCESS_TOKEN_EXPIRE_MINUTES),
-            "jti": jti,
+            "jti": refresh_token_jti,
         }
         return jwt.encode(payload, self.A_SECRET_KEY, algorithm=self.ALGORITHM)
 
-    def create_refresh_token(self, user: User) -> Tuple[str, datetime]:
+    def create_refresh_token(self, user: User) -> Tuple[str, str, datetime]:
         jti = str(uuid.uuid4())
         expiration_dt = datetime.utcnow() + timedelta(
             minutes=self.REFRESH_TOKEN_EXPIRE_DAYS
@@ -62,7 +66,7 @@ class AuthService:
             "jti": jti,
         }
         encoded_jwt = jwt.encode(payload, self.R_SECRET_KEY, algorithm=self.ALGORITHM)
-        return encoded_jwt, expiration_dt
+        return encoded_jwt, jti, expiration_dt
 
     async def is_token_revoked(self, db: AsyncSession, jti: str) -> bool:
         result = await db.execute(select(RevokedToken).where(RevokedToken.jti == jti))
@@ -70,11 +74,56 @@ class AuthService:
 
     async def revoke_token(self, db: AsyncSession, jti: str):
         if not await self.is_token_revoked(db, jti):
-            db.add(RevokedToken(jti=jti))
+            revoked_at = datetime.utcnow()
+            db.add(RevokedToken(jti=jti, revoked_at=revoked_at))
             await db.commit()
+
+    async def verify_captcha(
+        self, captcha_token: str, min_score: float | None = None
+    ) -> bool:
+        if self.CAPTCHA_BYPASS:
+            if captcha_token == "false_token":
+                return False
+            return True
+        if not self.RECAPTCHA_SECRET_KEY:
+            raise HTTPException(status_code=404, detail="Missing reCaptcha key")
+        url: str = "https://www.google.com/recaptcha/api/siteverify"
+        data = {
+            "secret": self.RECAPTCHA_SECRET_KEY,
+            "response": captcha_token,
+        }
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(url, data=data)
+                result = response.json()
+        except Exception as e:
+            print(f"[verify_captcha] Network error: {e}")
+            raise HTTPException(status_code=500, detail="Failed to verify captcha")
+        print(result)
+        success = result.get("success", False)
+        return success
+
+    async def VERIFY_ONBOARDING(self, token: str):
+        try:
+            payload = jwt.decode(token, self.A_SECRET_KEY, self.ALGORITHM)
+            email = payload.get("sub")
+            if payload.get("type") != "onboarding":
+                raise HTTPException(status_code=404, detail="Invalid Token")
+            return {"email": email}
+        except HTTPException:
+            raise
+        except Exception as e:
+            print("-----------------")
+            print(f"verify_onboarding: {e}")
+            raise HTTPException(status_code=500, detail="internal server error")
 
     async def LOGIN_ADMIN(self, request: Request, admin: AdminCreate, db: AsyncSession):
         try:
+            captcha_result = await self.verify_captcha(
+                captcha_token=admin.captcha_token
+            )
+            if not captcha_result:
+                raise HTTPException(status_code=400, detail="Invalid captcha")
             result = await db.execute(
                 select(User)
                 .options(selectinload(User.role).selectinload(Role.permissions))
@@ -86,13 +135,18 @@ class AuthService:
             admin_hashed_password: str = str(admin_obj.password_hash)
             if not self.verify_password(admin.password, admin_hashed_password):
                 raise HTTPException(status_code=401, detail="the password is wrong")
-            access_token = self.create_access_token(admin_obj)
-            refresh_token, expires_at = self.create_refresh_token(admin_obj)
+            refresh_token, refresh_token_jti, expires_at = self.create_refresh_token(
+                admin_obj
+            )
+            access_token = self.create_access_token(
+                admin_obj, refresh_token_jti=refresh_token_jti
+            )
             user_agent = request.headers.get("user-agent", "unknown")
             client_ip = request.client.host if request.client else "unknown"
             session = Session(
                 user_id=admin_obj.user_id,
                 refresh_token=refresh_token,
+                refresh_token_jti=refresh_token_jti,
                 device_info=user_agent,
                 ip_address=client_ip,
                 expires_at=expires_at,
@@ -100,17 +154,33 @@ class AuthService:
             db.add(session)
             await db.commit()
             await db.refresh(session)
-            return JSONResponse(
+            response = JSONResponse(
                 status_code=200,
                 content={
-                    "access_token": access_token,
-                    "refresh_token": refresh_token,
-                    "token_type": "bearer",
+                    "msg": "Login Successfull",
                     "user_id": admin_obj.user_id,
                     "email": admin_obj.email,
                     "session_id": session.session_id,
                 },
             )
+            response.set_cookie(
+                key="access_token",
+                value=access_token,
+                httponly=True,
+                secure=True,
+                samesite="strict",
+                max_age=self.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            )
+            response.set_cookie(
+                key="refresh_token",
+                value=refresh_token,
+                httponly=True,
+                secure=True,
+                samesite="strict",
+                max_age=self.ACCESS_TOKEN_EXPIRE_MINUTES * 24 * 60,
+                path="/auth/refresh",
+            )
+            return response
         except HTTPException:
             raise
         except Exception as e:
@@ -120,35 +190,84 @@ class AuthService:
                 status_code=500, detail="internal server error : login_admin route"
             )
 
-    async def LOGOUT_ADMIN(
-        self, request: Request, token: str, db: AsyncSession, session_id: int
+    async def LOGOUT(
+        self,
+        access_token: str,
+        db: AsyncSession,
     ):
         try:
             try:
-                payload = jwt.decode(
-                    token, settings.ACCESS_SECRET_TOKEN, algorithms=[settings.ALGORITHM]
+                payload = await self.verify_token(
+                    token=access_token,
+                    secret_key=self.A_SECRET_KEY,
+                    algorithm=self.ALGORITHM,
                 )
                 jti = payload.get("jti")
             except JWTError:
                 raise HTTPException(status_code=401, detail="Invalid token")
-            revoked_entry = RevokedToken(jti=jti, revoked_at=datetime.utcnow())
-            db.add(revoked_entry)
+            await self.revoke_token(db=db, jti=jti)
             result = await db.execute(
-                select(Session).filter(Session.session_id == session_id)
+                select(Session).filter(Session.refresh_token_jti == jti)
             )
             session_obj = result.scalar_one_or_none()
+            if not session_obj:
+                raise HTTPException(status_code=404, detail="session_id is not found")
             session_obj.is_revoked = True
-            await db.commit()
-            return JSONResponse(
-                status_code=200, content={"message": "Admin successfully logged out"}
+            response = JSONResponse(
+                status_code=200, content={"msg": "logged out successfully"}
             )
+            response.delete_cookie(
+                "access_token", httponly=True, secure=True, samesite="strict"
+            )
+            response.delete_cookie(
+                "refresh_token", httponly=True, secure=True, samesite="strict"
+            )
+            await db.commit()
+            return {"msg": "logged out successfully"}
         except HTTPException:
             raise
         except Exception as e:
             await db.rollback()
-            print(f"[admin-logout] error : {e}")
+            print(f"[user-logout] error : {e}")
+            raise HTTPException(status_code=500, detail="internal server error: logout")
+
+    async def LOGOUT_ALL(self, user_id: int, db: AsyncSession, access_token: str):
+        try:
+            try:
+                payload = jwt.decode(
+                    access_token,
+                    settings.ACCESS_SECRET_TOKEN,
+                    algorithms=[settings.ALGORITHM],
+                )
+                jti = payload.get("jti")
+            except JWTError:
+                raise HTTPException(status_code=401, detail="Invalid token")
+            await self.revoke_token(db=db, jti=jti)
+            result = await db.execute(
+                select(Session).filter(Session.user_id == user_id)
+            )
+            sessions = result.scalars().all()
+            for session in sessions:
+                await self.revoke_token(db=db, jti=session.refresh_token_jti)
+                session.is_revoked = True
+            response = JSONResponse(
+                status_code=200, content={"msg": "logged out from all successfully"}
+            )
+            response.delete_cookie(
+                "access_token", httponly=True, secure=True, samesite="strict"
+            )
+            response.delete_cookie(
+                "refresh_token", httponly=True, secure=True, samesite="strict"
+            )
+            await db.commit()
+            return {"msg": "logged out from all devices"}
+        except HTTPException:
+            raise
+        except Exception as e:
+            print("--------------------")
+            print(f"[logout from all devices] {e}")
             raise HTTPException(
-                status_code=500, detail="internal server error: admin-logout"
+                status_code=500, detail="internal server error : [LOGOUT_ALL]"
             )
 
     async def LOGIN_USER(
@@ -259,6 +378,25 @@ class AuthService:
                 status_code=500, detail="internal server error: [create_user]"
             )
 
+    async def ONBOARD_NEW_EMPLOYEE(self, db: AsyncSession, token: str, password: str):
+        try:
+            payload = jwt.decode(token, self.A_SECRET_KEY, algorithms=[self.ALGORITHM])
+            email = payload.get("sub")
+            result = await db.execute(select(User).filter(User.email == email))
+            user = result.scalar_one_or_none()
+            if not user:
+                raise HTTPException(status_code=404, detail="User not found")
+            if user.is_active:
+                raise HTTPException(status_code=400, detail="User already onboarded")
+            user.password_hash = self.hash_password(password)
+            user.is_active = True
+            await db.commit()
+            return {"msg": "Welcome to the team!"}
+        except ExpiredSignatureError as e:
+            raise HTTPException(status_code=400, detail="Link expired : {e}")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail="internal server error : {e}")
+
     async def FORGOT_PASSWORD(self, email: str, db: AsyncSession):
         try:
             result = await db.execute(select(User).filter(User.email == email))
@@ -330,8 +468,76 @@ class AuthService:
         except HTTPException:
             raise
         except Exception as e:
+            print('---------------------')
             print(f"[reset_password] error: {e}")
             await db.rollback()
             raise HTTPException(
                 status_code=500, detail="internal server error: reset_password"
             )
+
+    async def REFRESH_TOKEN(self, db: AsyncSession, request: Request):
+        try:
+            refresh_token = request.cookies.get("refresh_token")
+            if not refresh_token:
+                raise HTTPException(status_code=401, detail="missing refresh token")
+            try:
+                payload = self.verify_token(
+                    token=refresh_token,
+                    secret_key=self.R_SECRET_KEY,
+                    algorithm=self.ALGORITHM,
+                )
+                jti = payload.get("jti")
+            except JWTError:
+                raise HTTPException(status_code=401, detail="incalid token")
+            if not await self.is_token_revoked(db=db, jti=jti):
+                raise HTTPException(
+                    status_code=401, detail="token is revoked pls log in"
+                )
+            result = await db.execute(
+                select(Session).filter(Session.refresh_token_jti == jti)
+            )
+            session_obj = result.scalar_one_or_none()
+            if not session_obj or session_obj.is_revoked = True:
+                raise HTTPException(status_code=401 , detail='the session has already expired')
+            if session_obj.expires_at < datetime.utcnow():
+                raise HTTPException(status_code=401 , detail='the session has already expired')
+            result = await db.execute(select(User).filter(User.user_id == payload.get('user_id')))
+            user_obj = result.scalar_one_or_none()
+            if not user_obj:
+                raise HTTPException(status_code=404 , detail='user id not found')
+            new_refresh_token , new_jti , expiry = self.create_refresh_token(user_obj)
+            new_access_token = self.create_access_token(user_obj , new_jti)
+            await self.revoke_token(db=db , jti=jti)
+            session_obj.is_revoked = True
+            user_agent = request.headers.get("user-agent", "unknown")
+            client_ip = request.client.host if request.client else "unknown"
+            new_session = Session(
+                user_id = user_obj.user_id , 
+                refresh_token = new_refresh_token , 
+                refresh_token_jti = new_jti , 
+                device_info = user_agent , 
+                ip_address = client_ip, 
+                expires_at = expiry
+            )
+            response =JSONResponse(status_code=200 , content={
+                'msg' : 'token refreshed' 
+            })
+            response.set_cookie(
+                key="refresh_token",
+                value=refresh_token,
+                httponly=True,
+                secure=True,
+                samesite="strict",
+                max_age=self.ACCESS_TOKEN_EXPIRE_MINUTES * 24 * 60,
+                path="/auth/refresh",
+            )
+            await db.commit()
+            return response
+        except HTTPException:
+            raise
+        except Exception as e:
+            print('-----------------------')
+            print(f'refresh_token : {e}')
+            raise HTTPException(status_code=500 , detail='interna; server error : [refresh_token]')
+
+

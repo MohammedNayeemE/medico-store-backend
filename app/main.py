@@ -1,11 +1,11 @@
-import logging
-from re import L
-
-from fastapi import Depends, FastAPI, HTTPException
+import redis.asyncio as aioredis
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
+from fastapi_limiter import FastAPILimiter
+from fastapi_limiter.depends import RateLimiter
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -30,12 +30,14 @@ from app.middlewares.logging_middleware import LoggingMiddleware
 from app.models.inventory_management_models import *
 from app.models.order_management_models import *
 from app.models.user_management_models import *
+from app.schemas.user_schemas import AdminCreate
 from app.services.auth_service import AuthService
 
 auth_manager = AuthService()
 app = FastAPI(
     root_path="/api/v1", title=settings.APP_NAME, version=settings.APP_VERSION
 )
+redis_client = None
 
 
 # def custom_openapi():
@@ -97,19 +99,38 @@ app.add_middleware(LoggingMiddleware)
 
 @app.on_event("startup")
 async def startup():
+    global redis_client
     print("Creating tables...")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     print("Tables created!")
+    try:
+        redis = await aioredis.from_url(
+            "redis://localhost", encoding="utf-8", decode_responses=True
+        )
+        await FastAPILimiter.init(redis)
+        print("Redis connection established")
+    except Exception as e:
+        print(f"error while connecting to redis : {e}")
 
 
-@app.get("/", include_in_schema=False)
+@app.on_event("shutdown")
+async def shutdown():
+    try:
+        await FastAPILimiter.close()
+        print("Redis connection closed")
+    except Exception as e:
+        print(f"Error closing redis {e}")
+
+
+@app.get("/", dependencies=[Depends(RateLimiter(times=5, seconds=60))])
 async def get_root():
     return JSONResponse(status_code=200, content={"msg": "the server is running"})
 
 
 @app.post("/auth/admin/token", include_in_schema=False)
 async def login(
+    request: Request,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: AsyncSession = Depends(get_postgres),
 ):
@@ -124,14 +145,55 @@ async def login(
     if not auth_manager.verify_password(form_data.password, user_obj.password_hash):
         raise HTTPException(status_code=401, detail="wrong password")
 
-    access_token = auth_manager.create_access_token(user=user_obj)
-    refresh_token = auth_manager.create_refresh_token(user=user_obj)
-
-    return {
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-        "token_type": "bearer",
-    }
+    refresh_token, refresh_token_jti, expires_at = auth_manager.create_refresh_token(
+        user_obj
+    )
+    access_token = auth_manager.create_access_token(
+        user_obj, refresh_token_jti=refresh_token_jti
+    )
+    user_agent = request.headers.get("user-agent", "unknown")
+    client_ip = request.client.host if request.client else "unknown"
+    session = Session(
+        user_id=user_obj.user_id,
+        refresh_token=refresh_token,
+        refresh_token_jti=refresh_token_jti,
+        device_info=user_agent,
+        ip_address=client_ip,
+        expires_at=expires_at,
+    )
+    db.add(session)
+    await db.commit()
+    await db.refresh(session)
+    response = JSONResponse(
+        status_code=200,
+        content={
+            "msg": "Login Successfull",
+            "user_id": user_obj.user_id,
+            "email": user_obj.email,
+            "session_id": session.session_id,
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "token_type": "bearer",
+        },
+    )
+    response.set_cookie(
+        key="access_token",
+        value=access_token,
+        httponly=True,
+        secure=True,
+        samesite="strict",
+        max_age=auth_manager.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    )
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        httponly=True,
+        secure=True,
+        samesite="strict",
+        max_age=auth_manager.ACCESS_TOKEN_EXPIRE_MINUTES * 24 * 60,
+        path="/auth/refresh",
+    )
+    return response
 
 
 app.include_router(router=auth_routes.router)
