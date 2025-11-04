@@ -1,4 +1,3 @@
-import redis.asyncio as aioredis
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
@@ -25,7 +24,7 @@ from app.api.routes import (
     role_routes,
 )
 from app.core.config import allowed_origins, settings
-from app.core.database import Base, engine
+from app.core.database import Base, close_redis, engine, init_redis
 from app.middlewares.logging_middleware import LoggingMiddleware
 from app.models.inventory_management_models import *
 from app.models.order_management_models import *
@@ -37,7 +36,6 @@ auth_manager = AuthService()
 app = FastAPI(
     root_path="/api/v1", title=settings.APP_NAME, version=settings.APP_VERSION
 )
-redis_client = None
 
 
 # def custom_openapi():
@@ -105,9 +103,7 @@ async def startup():
         await conn.run_sync(Base.metadata.create_all)
     print("Tables created!")
     try:
-        redis = await aioredis.from_url(
-            "redis://localhost", encoding="utf-8", decode_responses=True
-        )
+        redis = await init_redis()
         await FastAPILimiter.init(redis)
         print("Redis connection established")
     except Exception as e:
@@ -118,6 +114,7 @@ async def startup():
 async def shutdown():
     try:
         await FastAPILimiter.close()
+        await close_redis()
         print("Redis connection closed")
     except Exception as e:
         print(f"Error closing redis {e}")

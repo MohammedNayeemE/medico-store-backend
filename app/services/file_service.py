@@ -88,7 +88,7 @@ class FileService:
                 await db.flush()
                 data.append({"asset_id": str(asset.asset_id), "file_id": file_url})
             await db.commit()
-            return JSONResponse(status_code=200, content={"data": data})
+            return {"data": data}
         except HTTPException:
             raise
         except Exception as e:

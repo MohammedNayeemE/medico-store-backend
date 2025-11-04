@@ -1,12 +1,20 @@
+import csv
+import io
 import json
+import os
+import stat
 from datetime import datetime
 from operator import or_
 from typing import Any, Dict, List, Optional
 
+import pandas as pd
 from fastapi import File, HTTPException, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from motor.motor_asyncio import AsyncIOMotorGridFSBucket
-from sqlalchemy import func, or_, select
+from pandas._libs.lib import maybe_convert_numeric
+from pandas.core.api import notna
+from sqlalchemy import asc, desc, func, or_, select
+from sqlalchemy.engine.reflection import cache
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
@@ -37,12 +45,15 @@ from app.schemas.inventory_schemas import (
     TagCreate,
     TagReponse,
 )
+from app.services.cache_service import get_cache, set_cache
 from app.services.file_service import FileService
 
 
 class InventoryManagementService:
     def __init__(self) -> None:
         self.file_manager = FileService()
+        self.ALLOWED_EXTENSIONS = {".csv", ".xlsx"}
+        self.MAX_FILE_SIZE_MB = 10
 
     async def UPLOAD_MEDICINE_IMAGE(
         self,
@@ -63,6 +74,87 @@ class InventoryManagementService:
         await db.commit()
         await db.refresh(new_medicine_image)
         return new_medicine_image
+
+    async def UPLOAD_MEDICINE_IMAGES(
+        self,
+        db: AsyncSession,
+        user_id: int,
+        files: List[UploadFile],
+        bucket: AsyncIOMotorGridFSBucket,
+        medicine_id: int,
+    ):
+        try:
+            result = await db.execute(
+                select(Medicine.medicine_id).filter(Medicine.medicine_id == medicine_id)
+            )
+            medicine_obj = result.scalar_one_or_none()
+            if not medicine_obj:
+                raise HTTPException(status_code=404, detail="medicine id not found")
+            asset_ids = await self.file_manager.UPLOAD_MULTIPLE_FILES(
+                bucket=bucket, files=files, db=db, user_id=user_id
+            )
+            for items in asset_ids["data"]:
+                new_medicine_image = MedicineImage(
+                    medicine_id=medicine_id, file_asset_id=items["asset_id"]
+                )
+                db.add(new_medicine_image)
+            await db.commit()
+            return {"msg": "all the images are added"}
+        except HTTPException:
+            raise
+        except Exception as e:
+            print("--------------------------")
+            print(f"[upload_medicine_images] : {e}")
+            raise HTTPException(status_code=500)
+
+    async def DOWNLOAD_TEMPLATE(self):
+        try:
+            headers = [
+                "medicine_name",
+                "generic_name",
+                "manufacturer",
+                "description",
+                "is_prescribed",
+                "weight",
+                "hsn_code",
+                "category_names",
+                "tag_names",
+                "side_effect_names",
+                "alternative_names",
+            ]
+            output = io.StringIO()
+            writer = csv.writer(output)
+            writer.writerow(headers)
+            writer.writerow(
+                [
+                    "Paracetamol",
+                    "Acetaminophen",
+                    "Cipla",
+                    "Pain relief",
+                    "False",
+                    "500",
+                    "30049099",
+                    "5,6",
+                    "3",
+                    "7",
+                ]
+            )
+            output.seek(0)
+            return StreamingResponse(
+                iter([output.getvalue()]),
+                media_type="text/csv",
+                headers={
+                    "Content-Disposition": "attachment; filename=medicine_template.csv"
+                },
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            print("-------------------------------")
+            print(f"DOWNLOAD_TEMPLATE : {e}")
+            raise HTTPException(
+                status_code=500, detail="internal server error : [DOWNLOAD_TEMPLATE]"
+            )
 
     async def CREATE_MEDICINE(self, db: AsyncSession, medicine_data: MedicineCreate):
         try:
@@ -114,12 +206,117 @@ class InventoryManagementService:
                 status_code=500, detail="internal server error : [create_medicine]"
             )
 
+    async def BULK_UPLOAD_MEDICINES(self, db: AsyncSession, file: UploadFile):
+        try:
+            ext = os.path.splitext(file.filename)[1].lower()
+            if ext not in self.ALLOWED_EXTENSIONS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unsupported file type. Allowed types: {', '.join(self.ALLOWED_EXTENSIONS)}",
+                )
+            file_content = await file.read()
+            file_size_mb = len(file_content) / (1024 * 1024)
+            if file_size_mb > self.MAX_FILE_SIZE_MB:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"File too large. Max allowed size is {self.MAX_FILE_SIZE_MB} MB.",
+                )
+            try:
+                if ext == ".csv":
+                    df = pd.read_csv(io.BytesIO(file_content))
+                else:
+                    df = pd.read_excel(io.BytesIO(file_content))
+            except Exception as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Failed to parse the file: {str(e)}",
+                )
+            required_columns = [
+                "medicine_name",
+                "generic_name",
+                "manufacturer",
+                "description",
+                "is_prescribed",
+                "weight",
+                "hsn_code",
+            ]
+            missing_cols = [c for c in required_columns if c not in df.columns]
+            if missing_cols:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Missing required columns: {', '.join(missing_cols)}",
+                )
+            inserted, errors = [], []
+            for index, row in df.iterrows():
+                try:
+                    med = Medicine(
+                        medicine_name=row["medicine_name"],
+                        generic_name=row["generic_name"],
+                        manufacturer=row["manufacturer"],
+                        description=row["description"],
+                        is_prescribed=bool(row["is_prescribed"]),
+                        weight=row["weight"],
+                        hsn_code=str(row["hsn_code"]),
+                    )
+                    db.add(med)
+                    await db.flush()
+
+                    def safe_split(value):
+                        return [
+                            int(v.strip()) for v in str(value).split(",") if v.strip()
+                        ]
+
+                    if pd.notna(row.get("category_ids")):
+                        for cat_id in safe_split(row["category_ids"]):
+                            db.add(
+                                MedicineCategory(
+                                    medicine_id=med.medicine_id, category_id=cat_id
+                                )
+                            )
+                    if pd.notna(row.get("tags_ids")):
+                        for tag_id in safe_split(row["tags_ids"]):
+                            db.add(
+                                MedicineTag(medicine_id=med.medicine_id, tag_id=tag_id)
+                            )
+                    if pd.notna(row.get("alternative_ids")):
+                        for alt_id in safe_split(row["alternative_ids"]):
+                            db.add(
+                                MedicineAlternative(
+                                    medicine_id=med.medicine_id, alternative_id=alt_id
+                                )
+                            )
+                    if pd.notna(row.get("side_effect_ids")):
+                        for sf_id in safe_split(row["side_effect_ids"]):
+                            db.add(
+                                MedicineSideEffect(
+                                    medicine_id=med.medicine_id, side_effect_id=sf_id
+                                )
+                            )
+                    inserted.append(row["medicine_name"])
+                except Exception as e:
+                    errors.append({"row": index, "error": str(e)})
+            await db.commit()
+            return {
+                "msg": f"{len(inserted)} medicines uploaded successfully",
+                "errors": errors,
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            print("-------------------------------------------")
+            print(f"[bulk_upload_medicines] : {e}")
+            raise HTTPException(status_code=500, detail="Internal server error")
+
     async def GET_MEDICINES(
         self,
         db: AsyncSession,
         name: Optional[str] = None,
         category: Optional[str] = None,
         tag: Optional[str] = None,
+        min_price: Optional[float] = None,
+        max_price: Optional[float] = None,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc",
         skip: int = 0,
         limit: int = 10,
     ):
@@ -148,19 +345,40 @@ class InventoryManagementService:
                 )
             if tag:
                 query = query.join(Medicine.tags).where(Tag.name.ilike(f"%{tag}%"))
+            if min_price is not None:
+                query = query.where(Medicine.price >= min_price)
+            if max_price is not None:
+                query = query.where(Medicine.price <= max_price)
+            if sort_by:
+                valid_sort_columns = {
+                    "price": Medicine.price,
+                    "name": Medicine.medicine_name,
+                    "created_at": Medicine.created_at,
+                    "updated_at": Medicine.updated_at,
+                }
+                if sort_by not in valid_sort_columns:
+                    raise HTTPException(
+                        status_code=400, detail=f"Invalid sort_by field: {sort_by}"
+                    )
+                sort_column = valid_sort_columns[sort_by]
+                if sort_order.lower() == "desc":
+                    query = query.order_by(desc(sort_column))
+                else:
+                    query = query.order_by(asc(sort_column))
+            else:
+                query = query.order_by(asc(Medicine.medicine_name))
             query = query.offset(skip).limit(limit)
             result = await db.execute(query)
             medicines = result.scalars().unique().all()
-            if not medicines:
-                return []
-            return medicines
+            return medicines if medicines else []
         except HTTPException:
             raise
         except Exception as e:
             print("---------------------")
             print(f"[get_medicines] : {e}")
             raise HTTPException(
-                status_code=500, detail="internal server error : [get_medicines]"
+                status_code=500,
+                detail="internal server error : [get_medicines]",
             )
 
     async def GET_MEDICINE_BY_ID(self, db: AsyncSession, medicine_id: int):
@@ -1096,3 +1314,99 @@ class InventoryManagementService:
             raise HTTPException(
                 status_code=500, detail="Internal server error: [SOFT_DELETE_GST_SLAB]"
             )
+
+    async def GET_AVAILABLE_MEDICINES_FOR_CUSTOMER(
+        self,
+        db: AsyncSession,
+        name: Optional[str] = None,
+        category: Optional[str] = None,
+        tag: Optional[str] = None,
+        min_price: Optional[float] = None,
+        max_price: Optional[float] = None,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc",
+        skip: int = 0,
+        limit: int = 10,
+    ):
+        try:
+            cache_key = f"medicines:{name}:{category}:{tag}:{min_price}:{max_price}:{sort_by}:{sort_order}:{skip}:{limit}"
+            cached_data = await get_cache(cache_key)
+            if cached_data:
+                print("cache-hit")
+                return cached_data
+            query = (
+                select(Medicine)
+                .options(
+                    joinedload(Medicine.categories),
+                    joinedload(Medicine.tags),
+                    joinedload(Medicine.side_effects),
+                    joinedload(Medicine.alternatives),
+                    joinedload(Medicine.gst_slab),
+                )
+                .where(Medicine.is_deleted == False)
+            )
+            if name:
+                query = query.where(
+                    or_(
+                        Medicine.medicine_name.ilike(f"%{name}%"),
+                        Medicine.generic_name.ilike(f"%{name}%"),
+                    )
+                )
+            if category:
+                query = query.join(Medicine.categories).where(
+                    Category.category_name.ilike(f"%{category}%")
+                )
+            if tag:
+                query = query.join(Medicine.tags).where(Tag.name.ilike(f"%{tag}%"))
+            if min_price is not None:
+                query = query.where(Medicine.price >= min_price)
+            if max_price is not None:
+                query = query.where(Medicine.price <= max_price)
+            if sort_by:
+                valid_sort_columns = {
+                    "name": Medicine.medicine_name,
+                    "created_at": Medicine.created_at,
+                    "updated_at": Medicine.updated_at,
+                }
+                if sort_by not in valid_sort_columns:
+                    raise HTTPException(
+                        status_code=400, detail=f"Invalid sort_by field: {sort_by}"
+                    )
+                sort_column = valid_sort_columns[sort_by]
+                if sort_order.lower() == "desc":
+                    query = query.order_by(desc(sort_column))
+                else:
+                    query = query.order_by(asc(sort_column))
+            else:
+                query = query.order_by(asc(Medicine.medicine_name))
+            query = query.offset(skip).limit(limit)
+            result = await db.execute(query)
+            medicines = result.scalars().unique().all()
+            response = [self._serialize_medicine(medicine) for medicine in medicines]
+            await set_cache(cache_key, response)
+            return response
+        except HTTPException:
+            raise
+        except Exception as e:
+            print("---------------------")
+            print(f"[get_medicines] : {e}")
+            raise HTTPException(
+                status_code=500,
+                detail="internal server error : [get_medicines]",
+            )
+
+    def _serialize_medicine(self, medicine: Medicine):
+        return {
+            "medicine_id": medicine.medicine_id,
+            "medicine_name": medicine.medicine_name,
+            "generic_name": medicine.generic_name,
+            "description": medicine.description,
+            "weight": medicine.weight,
+            "created_at": str(medicine.created_at),
+            "updated_at": str(medicine.updated_at),
+            "categories": [c.category_name for c in medicine.categories],
+            "tags": [t.name for t in medicine.tags],
+            "side_effects": [s.side_effect for s in medicine.side_effects],
+            "alternatives": [a.name for a in medicine.alternatives],
+            "gst_slab": (medicine.gst_slab.gst_rate if medicine.gst_slab else None),
+        }

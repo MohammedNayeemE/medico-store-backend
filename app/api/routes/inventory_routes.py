@@ -2,6 +2,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Body, Depends, File, Path, Query, Security, UploadFile
 from fastapi.responses import JSONResponse
+from sqlalchemy import desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependecies.auth import get_current_user, oauth2_scheme
@@ -39,9 +40,10 @@ async def get_root_dev():
 
 
 @medicine_router.post(
-    "/upload-single-image/{medicine_id}", description="Upload a single medicine image"
+    "/upload-thumbnail-image/{medicine_id}",
+    description="Upload a single medicine image",
 )
-async def upload_single_image(
+async def upload_thumbnail_image(
     current_user: User = Security(get_current_user, scopes=["admin:write"]),
     db: AsyncSession = Depends(get_postgres),
     file: UploadFile = File(...),
@@ -57,13 +59,51 @@ async def upload_single_image(
     return result
 
 
-@medicine_router.post("/", description="Create a new medicine entry")
+@medicine_router.post(
+    "/upload-mulitple-images/{medicine_id}",
+    description="Upload Multiple Images for the medicine",
+)
+async def upload_mulitple_images(
+    current_user: User = Security(get_current_user, scopes=["admin:write"]),
+    db: AsyncSession = Depends(get_postgres),
+    files: List[UploadFile] = File(...),
+    medicine_id: int = Path(...),
+):
+    result = await inventory_manager.UPLOAD_MEDICINE_IMAGES(
+        db=db,
+        user_id=current_user.user_id,
+        bucket=bucket,
+        files=files,
+        medicine_id=medicine_id,
+    )
+    return result
+
+
+@medicine_router.get("/download-template", description="download the medicine template")
+async def download_template():
+    result = await inventory_manager.DOWNLOAD_TEMPLATE()
+    return result
+
+
+@medicine_router.post("/create", description="Create a new medicine entry")
 async def create_medicine(
     current_user=Security(get_current_user, scopes=["admin:write"]),
     db: AsyncSession = Depends(get_postgres),
     medicine_data: MedicineCreate = Body(...),
 ):
     result = await inventory_manager.CREATE_MEDICINE(db=db, medicine_data=medicine_data)
+    return result
+
+
+@medicine_router.post(
+    "/bulk-upload-medicines", description="Bulk upload the medicine data"
+)
+async def bulk_upload_medicine(
+    current_user=Security(get_current_user, scopes=["admin:write"]),
+    db: AsyncSession = Depends(get_postgres),
+    medicine_data: UploadFile = File(...),
+):
+    result = await inventory_manager.BULK_UPLOAD_MEDICINES(db=db, file=medicine_data)
     return result
 
 
@@ -122,48 +162,63 @@ async def soft_delete_medicine(
     return result
 
 
-@medicine_router.post("/{medicine_id}/categories", include_in_schema=False)
-async def link_medicine_to_categories(
-    medicine_id: int = Path(...),
-    current_user=Security(get_current_user, scopes=["admin:write"]),
+@medicine_router.get(
+    "/customer/medicines",
+    description="List all available medicines with search, filters, and pagination",
+)
+async def list_medicines_for_customer(
     db: AsyncSession = Depends(get_postgres),
-    category_data: dict = Body(...),
+    search: Optional[str] = Query(None, description="Search by name or description"),
+    category: Optional[str] = Query(None),
+    tag: Optional[str] = Query(None),
+    min_price: Optional[float] = Query(None),
+    max_price: Optional[float] = Query(None),
+    sort_by: Optional[str] = Query("name", description="Sort by 'price' or 'name'"),
+    order: Optional[str] = Query("asc", description="Sort order: 'asc' or 'desc'"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(10, le=100),
 ):
-    """Link medicine to categories"""
-    pass
+    result = await inventory_manager.GET_AVAILABLE_MEDICINES_FOR_CUSTOMER(
+        db=db,
+        name=search,
+        category=category,
+        tag=tag,
+        sort_by=sort_by,
+        sort_order=order,
+        skip=skip,
+        limit=limit,
+    )
+    return result
 
 
-@medicine_router.post("/medicines/{medicine_id}/tags", include_in_schema=False)
-async def link_medicine_to_tags(
-    medicine_id: int = Path(...),
-    current_user=Security(get_current_user, scopes=["admin:write"]),
+@medicine_router.get(
+    "/customer/medicines/{medicine_id}",
+    description="Get detailed information about a specific medicine",
+)
+async def get_medicine_details_for_customer(
     db: AsyncSession = Depends(get_postgres),
-    tag_data: dict = Body(...),
-):
-    """Link medicine to tags"""
-    pass
-
-
-@medicine_router.post("/medicines/{medicine_id}/side-effects", include_in_schema=False)
-async def link_medicine_to_side_effects(
     medicine_id: int = Path(...),
-    current_user=Security(get_current_user, scopes=["admin:write"]),
-    db: AsyncSession = Depends(get_postgres),
-    side_effect_data: dict = Body(...),
 ):
-    """Link medicine to side effects"""
     pass
+    # result = await inventory_manager.GET_MEDICINE_DETAILS_FOR_CUSTOMER(
+    #     db=db, medicine_id=medicine_id
+    # )
+    # return result
 
 
-@medicine_router.post("/medicines/{medicine_id}/alternatives", include_in_schema=False)
-async def link_medicine_to_alternatives(
+@medicine_router.get(
+    "/customer/medicines/{medicine_id}/related",
+    description="Fetch related or similar medicines based on category or tags",
+)
+async def get_related_medicines(
+    db: AsyncSession = Depends(get_postgres),
     medicine_id: int = Path(...),
-    current_user=Security(get_current_user, scopes=["admin:write"]),
-    db: AsyncSession = Depends(get_postgres),
-    alternative_data: dict = Body(...),
 ):
-    """Link medicine to alternatives"""
     pass
+    # result = await inventory_manager.GET_RELATED_MEDICINES(
+    #     db=db, medicine_id=medicine_id
+    # )
+    # return result
 
 
 @category_router.post("/", description="Create a new category")

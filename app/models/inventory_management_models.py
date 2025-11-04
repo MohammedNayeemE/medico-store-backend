@@ -153,7 +153,6 @@ class MedicineImage(Base):
         Integer, ForeignKey("file_assets.asset_id", ondelete="CASCADE"), nullable=False
     )
 
-    # Relationships
     medicine = relationship("Medicine", back_populates="images")
     file_asset = relationship("FileAsset")
 

@@ -16,8 +16,13 @@ from starlette.types import HTTPExceptionHandler
 from app.api.dependecies.get_db_sessions import get_postgres
 from app.core.config import settings
 from app.core.database import otp_store
-from app.models.user_management_models import (PasswordReset, RevokedToken,
-                                               Role, Session, User)
+from app.models.user_management_models import (
+    PasswordReset,
+    RevokedToken,
+    Role,
+    Session,
+    User,
+)
 from app.schemas.user_schemas import AdminCreate, OnBoardEmployee, UserCreate
 
 
@@ -468,7 +473,7 @@ class AuthService:
         except HTTPException:
             raise
         except Exception as e:
-            print('---------------------')
+            print("---------------------")
             print(f"[reset_password] error: {e}")
             await db.rollback()
             raise HTTPException(
@@ -497,31 +502,35 @@ class AuthService:
                 select(Session).filter(Session.refresh_token_jti == jti)
             )
             session_obj = result.scalar_one_or_none()
-            if not session_obj or session_obj.is_revoked = True:
-                raise HTTPException(status_code=401 , detail='the session has already expired')
+            if not session_obj or session_obj.is_revoked == True:
+                raise HTTPException(
+                    status_code=401, detail="the session has already expired"
+                )
             if session_obj.expires_at < datetime.utcnow():
-                raise HTTPException(status_code=401 , detail='the session has already expired')
-            result = await db.execute(select(User).filter(User.user_id == payload.get('user_id')))
+                raise HTTPException(
+                    status_code=401, detail="the session has already expired"
+                )
+            result = await db.execute(
+                select(User).filter(User.user_id == payload.get("user_id"))
+            )
             user_obj = result.scalar_one_or_none()
             if not user_obj:
-                raise HTTPException(status_code=404 , detail='user id not found')
-            new_refresh_token , new_jti , expiry = self.create_refresh_token(user_obj)
-            new_access_token = self.create_access_token(user_obj , new_jti)
-            await self.revoke_token(db=db , jti=jti)
+                raise HTTPException(status_code=404, detail="user id not found")
+            new_refresh_token, new_jti, expiry = self.create_refresh_token(user_obj)
+            new_access_token = self.create_access_token(user_obj, new_jti)
+            await self.revoke_token(db=db, jti=jti)
             session_obj.is_revoked = True
             user_agent = request.headers.get("user-agent", "unknown")
             client_ip = request.client.host if request.client else "unknown"
             new_session = Session(
-                user_id = user_obj.user_id , 
-                refresh_token = new_refresh_token , 
-                refresh_token_jti = new_jti , 
-                device_info = user_agent , 
-                ip_address = client_ip, 
-                expires_at = expiry
+                user_id=user_obj.user_id,
+                refresh_token=new_refresh_token,
+                refresh_token_jti=new_jti,
+                device_info=user_agent,
+                ip_address=client_ip,
+                expires_at=expiry,
             )
-            response =JSONResponse(status_code=200 , content={
-                'msg' : 'token refreshed' 
-            })
+            response = JSONResponse(status_code=200, content={"msg": "token refreshed"})
             response.set_cookie(
                 key="refresh_token",
                 value=refresh_token,
@@ -536,8 +545,8 @@ class AuthService:
         except HTTPException:
             raise
         except Exception as e:
-            print('-----------------------')
-            print(f'refresh_token : {e}')
-            raise HTTPException(status_code=500 , detail='interna; server error : [refresh_token]')
-
-
+            print("-----------------------")
+            print(f"refresh_token : {e}")
+            raise HTTPException(
+                status_code=500, detail="interna; server error : [refresh_token]"
+            )
