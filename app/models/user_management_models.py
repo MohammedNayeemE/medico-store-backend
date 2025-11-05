@@ -79,6 +79,11 @@ class User(Base):
     )
     sessions = relationship("Session", back_populates="user")
 
+    medicine_requests = relationship(
+        "MedicineRequest",
+        back_populates="user",
+    )
+
 
 class UserRole(Base):
     __tablename__ = "user_roles"

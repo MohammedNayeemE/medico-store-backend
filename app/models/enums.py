@@ -40,3 +40,9 @@ class IssueStatusEnum(str, Enum):
     in_progress = "in_progress"
     resolved = "resolved"
     closed = "closed"
+
+
+class RequestStatusEnum(str, Enum):
+    pending = "pending"
+    verified = "verified"
+    rejected = "rejected"

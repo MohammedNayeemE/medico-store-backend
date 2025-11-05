@@ -11,12 +11,11 @@ import pandas as pd
 from fastapi import File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 from motor.motor_asyncio import AsyncIOMotorGridFSBucket
-from pandas._libs.lib import maybe_convert_numeric
 from pandas.core.api import notna
+from pydantic_settings.sources.providers.aws import import_aws_secrets_manager
 from sqlalchemy import asc, desc, func, or_, select
-from sqlalchemy.engine.reflection import cache
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import joinedload, selectinload
+from sqlalchemy.orm import aliased, joinedload, selectinload
 
 from app.models.inventory_management_models import (
     Alternative,
@@ -32,6 +31,7 @@ from app.models.inventory_management_models import (
     SideEffect,
     Tag,
 )
+from app.models.user_management_models import FileAsset
 from app.schemas.inventory_schemas import (
     AlternativeCreate,
     CategoryCreate,
@@ -45,7 +45,7 @@ from app.schemas.inventory_schemas import (
     TagCreate,
     TagReponse,
 )
-from app.services.cache_service import get_cache, set_cache
+from app.services.cache_service import CacheService
 from app.services.file_service import FileService
 
 
@@ -54,6 +54,8 @@ class InventoryManagementService:
         self.file_manager = FileService()
         self.ALLOWED_EXTENSIONS = {".csv", ".xlsx"}
         self.MAX_FILE_SIZE_MB = 10
+        self.cache_service = CacheService()
+        self.BASE_FILE_URL = "http://localhost:8000/api/file_routes/assets/"
 
     async def UPLOAD_MEDICINE_IMAGE(
         self,
@@ -310,19 +312,51 @@ class InventoryManagementService:
     async def GET_MEDICINES(
         self,
         db: AsyncSession,
-        name: Optional[str] = None,
-        category: Optional[str] = None,
-        tag: Optional[str] = None,
-        min_price: Optional[float] = None,
-        max_price: Optional[float] = None,
-        sort_by: Optional[str] = None,
+        name: str | None = None,
+        category: str | None = None,
+        tag: str | None = None,
+        min_price: float | None = None,
+        max_price: float | None = None,
+        sort_by: str | None = None,
         sort_order: str = "asc",
         skip: int = 0,
         limit: int = 10,
     ):
         try:
+            cache_key = (
+                f"medicines:{name}:{category}:{tag}:{min_price}:{max_price}:"
+                f"{sort_by}:{sort_order}:{skip}:{limit}"
+            )
+            cached_data = await self.cache_service.get_cache(cache_key)
+            if cached_data:
+                print("cache-hit")
+                return cached_data
+            Batch = aliased(MedicineBatch)
+            batch_subq = (
+                select(
+                    Batch.medicine_id,
+                    Batch.selling_price,
+                    Batch.quantity,
+                    Batch.expiry_date,
+                )
+                .where(
+                    Batch.medicine_id == Medicine.medicine_id,
+                    Batch.is_deleted == False,
+                )
+                .order_by(
+                    Batch.expiry_date.asc()
+                )  # or Batch.created_at.desc() for latest batch
+                .limit(1)
+                .correlate(Medicine)
+                .subquery()
+            )
             query = (
-                select(Medicine)
+                select(
+                    Medicine,
+                    batch_subq.c.selling_price,
+                    batch_subq.c.quantity,
+                    batch_subq.c.expiry_date,
+                )
                 .options(
                     joinedload(Medicine.categories),
                     joinedload(Medicine.tags),
@@ -346,58 +380,217 @@ class InventoryManagementService:
             if tag:
                 query = query.join(Medicine.tags).where(Tag.name.ilike(f"%{tag}%"))
             if min_price is not None:
-                query = query.where(Medicine.price >= min_price)
+                query = query.where(batch_subq.c.selling_price >= min_price)
             if max_price is not None:
-                query = query.where(Medicine.price <= max_price)
+                query = query.where(batch_subq.c.selling_price <= max_price)
+            valid_sort_columns = {
+                "name": Medicine.medicine_name,
+                "created_at": Medicine.created_at,
+                "updated_at": Medicine.updated_at,
+                "price": batch_subq.c.selling_price,
+            }
             if sort_by:
-                valid_sort_columns = {
-                    "price": Medicine.price,
-                    "name": Medicine.medicine_name,
-                    "created_at": Medicine.created_at,
-                    "updated_at": Medicine.updated_at,
-                }
                 if sort_by not in valid_sort_columns:
                     raise HTTPException(
-                        status_code=400, detail=f"Invalid sort_by field: {sort_by}"
+                        status_code=400,
+                        detail=f"Invalid sort_by field: {sort_by}",
                     )
                 sort_column = valid_sort_columns[sort_by]
-                if sort_order.lower() == "desc":
-                    query = query.order_by(desc(sort_column))
-                else:
-                    query = query.order_by(asc(sort_column))
+                query = query.order_by(
+                    desc(sort_column)
+                    if sort_order.lower() == "desc"
+                    else asc(sort_column)
+                )
             else:
                 query = query.order_by(asc(Medicine.medicine_name))
             query = query.offset(skip).limit(limit)
             result = await db.execute(query)
-            medicines = result.scalars().unique().all()
-            return medicines if medicines else []
+            rows = result.all()
+            response = [self._serialize_medicine(row) for row in rows]
+            await self.cache_service.set_cache(cache_key, response)
+            return response
         except HTTPException:
             raise
         except Exception as e:
-            print("---------------------")
-            print(f"[get_medicines] : {e}")
+            print(f"[GET_MEDICINES ERROR]: {e}")
             raise HTTPException(
-                status_code=500,
-                detail="internal server error : [get_medicines]",
+                status_code=500, detail="Internal server error: [get_medicines]"
             )
+
+    def _serialize_medicine(self, row):
+        """Serialize Medicine + batch info into frontend-friendly dict"""
+        medicine, selling_price, quantity, expiry_date = row
+
+        thumbnail_url = f"{self.BASE_FILE_URL}/{medicine.image_asset_id if medicine.image_asset_id else -1}"
+        low_stock: bool = True if int(quantity) < 50 else False
+
+        return {
+            "medicine_id": medicine.medicine_id,
+            "medicine_name": medicine.medicine_name,
+            "generic_name": medicine.generic_name,
+            "description": medicine.description,
+            "weight": float(medicine.weight) if medicine.weight else None,
+            "selling_price": float(selling_price) if selling_price else None,
+            "islowStock": low_stock,
+            "expiry_date": str(expiry_date) if expiry_date else None,
+            "thumbnail_url": thumbnail_url,
+            "categories": [c.category_name for c in medicine.categories],
+            "tags": [t.name for t in medicine.tags],
+            "side_effects": [s.side_effect for s in medicine.side_effects],
+            "alternatives": [a.name for a in medicine.alternatives],
+            "created_at": str(medicine.created_at),
+            "is_prescribed": medicine.is_prescribed,
+            "updated_at": str(medicine.updated_at),
+            "gst_slab": (
+                float(medicine.gst_slab.gst_rate) if medicine.gst_slab else None
+            ),
+        }
 
     async def GET_MEDICINE_BY_ID(self, db: AsyncSession, medicine_id: int):
         try:
-            result = await db.execute(
-                select(Medicine).where(Medicine.medicine_id == medicine_id)
+            cache_key = f"medicine_details:{medicine_id}"
+            cached_data = await self.cache_service.get_cache(cache_key)
+            if cached_data:
+                print(f"Cache hit for medicine {medicine_id}")
+                return cached_data
+            query = (
+                select(Medicine)
+                .options(
+                    joinedload(Medicine.images).joinedload(
+                        MedicineImage.file_asset
+                    ),  # Gallery
+                    joinedload(Medicine.categories),
+                    joinedload(Medicine.tags),
+                    joinedload(Medicine.side_effects),
+                    joinedload(Medicine.alternatives),
+                    joinedload(Medicine.gst_slab),
+                    joinedload(Medicine.batches),  # All batches
+                )
+                .where(
+                    Medicine.medicine_id == medicine_id, Medicine.is_deleted == False
+                )
             )
+            result = await db.execute(query)
             medicine = result.scalar_one_or_none()
             if not medicine:
-                raise HTTPException(status_code=404, detail="medicine not found")
-            return medicine
+                raise HTTPException(status_code=404, detail="Medicine not found")
+            response = self._serialize_medicine_details(medicine)
+            await self.cache_service.set_cache(cache_key, response)
+            return response
         except HTTPException:
             raise
         except Exception as e:
-            print("---------------------")
-            print(f"[get_medicine_by_id] : {e}")
+            print(f"[GET_MEDICINE_DETAILS ERROR]: {e}")
             raise HTTPException(
-                status_code=500, detail="internal server error : [get_medicine_by_id]"
+                status_code=500,
+                detail="Internal server error: [get_medicine_details]",
             )
+
+    def _serialize_medicine_details(self, medicine: Medicine):
+        thumbnail_url = f"{self.BASE_FILE_URL}/{medicine.image_asset_id if medicine.image_asset_id else -1}"
+        gallery_images = [
+            {
+                "asset_id": img.file_asset_id,
+                "url": f"{self.BASE_FILE_URL}/{img.file_asset_id}",
+            }
+            for img in medicine.images
+        ]
+        batches = [
+            {
+                "batch_id": b.batch_id,
+                "batch_number": b.batch_number,
+                "expiry_date": str(b.expiry_date),
+                "quantity": b.quantity,
+                "purchase_price": float(b.purchase_price),
+                "selling_price": float(b.selling_price),
+                "created_at": str(b.created_at),
+            }
+            for b in sorted(
+                medicine.batches,
+                key=lambda x: x.expiry_date or x.created_at,
+            )
+            if not b.is_deleted
+        ]
+        return {
+            "medicine_id": medicine.medicine_id,
+            "medicine_name": medicine.medicine_name,
+            "generic_name": medicine.generic_name,
+            "manufacturer": medicine.manufacturer,
+            "description": medicine.description,
+            "weight": float(medicine.weight) if medicine.weight else None,
+            "thumbnail_url": thumbnail_url,
+            "gallery_images": gallery_images,
+            "is_prescribed": medicine.is_prescribed,
+            "batches": batches,
+            "categories": [c.category_name for c in medicine.categories],
+            "tags": [t.name for t in medicine.tags],
+            "side_effects": [s.side_effect for s in medicine.side_effects],
+            "alternatives": [a.name for a in medicine.alternatives],
+            "gst_slab": (
+                float(medicine.gst_slab.gst_rate) if medicine.gst_slab else None
+            ),
+            "created_at": str(medicine.created_at),
+            "updated_at": str(medicine.updated_at),
+        }
+
+    async def GET_LIGHT_MEDICINES(
+        self, db: AsyncSession, skip: int = 0, limit: int = 20
+    ):
+        try:
+            cache_key = f"light_medicines:{skip}:{limit}"
+            cached_data = await self.cache_service.get_cache(cache_key)
+            if cached_data:
+                print("cache-hit: [light_medicines]")
+                return cached_data
+            Batch = aliased(MedicineBatch)
+            batch_subq = (
+                select(Batch.medicine_id, Batch.selling_price)
+                .where(
+                    Batch.medicine_id == Medicine.medicine_id,
+                    Batch.is_deleted == False,
+                )
+                .order_by(Batch.expiry_date.asc())  # nearest expiry
+                .limit(1)
+                .correlate(Medicine)
+                .subquery()
+            )
+            query = (
+                select(
+                    Medicine,
+                    batch_subq.c.selling_price,
+                )
+                .options(joinedload(Medicine.image).joinedload(FileAsset))
+                .where(Medicine.is_deleted == False)
+                .order_by(Medicine.medicine_name.asc())
+                .offset(skip)
+                .limit(limit)
+            )
+            result = await db.execute(query)
+            rows = result.all()
+            response = [self._serialize_light_medicine(row) for row in rows]
+            await self.cache_service.set_cache(cache_key, response)
+            return response
+        except Exception as e:
+            print(f"[GET_LIGHT_MEDICINES ERROR]: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail="Internal server error: [get_light_medicines]",
+            )
+
+    def _serialize_light_medicine(self, row):
+        medicine, selling_price = row
+        thumbnail_url = (
+            f"{self.BASE_FILE_URL}/{medicine.image_asset_id}"
+            if medicine.image_asset_id
+            else -1
+        )
+        return {
+            "medicine_id": medicine.medicine_id,
+            "medicine_name": medicine.medicine_name,
+            "generic_name": medicine.generic_name,
+            "thumbnail_url": thumbnail_url,
+            "selling_price": float(selling_price) if selling_price else None,
+        }
 
     async def UPDATE_MEDICINE(
         self, db: AsyncSession, medicine_id: int, medicine_data: MedicineCreate
@@ -1314,99 +1507,3 @@ class InventoryManagementService:
             raise HTTPException(
                 status_code=500, detail="Internal server error: [SOFT_DELETE_GST_SLAB]"
             )
-
-    async def GET_AVAILABLE_MEDICINES_FOR_CUSTOMER(
-        self,
-        db: AsyncSession,
-        name: Optional[str] = None,
-        category: Optional[str] = None,
-        tag: Optional[str] = None,
-        min_price: Optional[float] = None,
-        max_price: Optional[float] = None,
-        sort_by: Optional[str] = None,
-        sort_order: str = "asc",
-        skip: int = 0,
-        limit: int = 10,
-    ):
-        try:
-            cache_key = f"medicines:{name}:{category}:{tag}:{min_price}:{max_price}:{sort_by}:{sort_order}:{skip}:{limit}"
-            cached_data = await get_cache(cache_key)
-            if cached_data:
-                print("cache-hit")
-                return cached_data
-            query = (
-                select(Medicine)
-                .options(
-                    joinedload(Medicine.categories),
-                    joinedload(Medicine.tags),
-                    joinedload(Medicine.side_effects),
-                    joinedload(Medicine.alternatives),
-                    joinedload(Medicine.gst_slab),
-                )
-                .where(Medicine.is_deleted == False)
-            )
-            if name:
-                query = query.where(
-                    or_(
-                        Medicine.medicine_name.ilike(f"%{name}%"),
-                        Medicine.generic_name.ilike(f"%{name}%"),
-                    )
-                )
-            if category:
-                query = query.join(Medicine.categories).where(
-                    Category.category_name.ilike(f"%{category}%")
-                )
-            if tag:
-                query = query.join(Medicine.tags).where(Tag.name.ilike(f"%{tag}%"))
-            if min_price is not None:
-                query = query.where(Medicine.price >= min_price)
-            if max_price is not None:
-                query = query.where(Medicine.price <= max_price)
-            if sort_by:
-                valid_sort_columns = {
-                    "name": Medicine.medicine_name,
-                    "created_at": Medicine.created_at,
-                    "updated_at": Medicine.updated_at,
-                }
-                if sort_by not in valid_sort_columns:
-                    raise HTTPException(
-                        status_code=400, detail=f"Invalid sort_by field: {sort_by}"
-                    )
-                sort_column = valid_sort_columns[sort_by]
-                if sort_order.lower() == "desc":
-                    query = query.order_by(desc(sort_column))
-                else:
-                    query = query.order_by(asc(sort_column))
-            else:
-                query = query.order_by(asc(Medicine.medicine_name))
-            query = query.offset(skip).limit(limit)
-            result = await db.execute(query)
-            medicines = result.scalars().unique().all()
-            response = [self._serialize_medicine(medicine) for medicine in medicines]
-            await set_cache(cache_key, response)
-            return response
-        except HTTPException:
-            raise
-        except Exception as e:
-            print("---------------------")
-            print(f"[get_medicines] : {e}")
-            raise HTTPException(
-                status_code=500,
-                detail="internal server error : [get_medicines]",
-            )
-
-    def _serialize_medicine(self, medicine: Medicine):
-        return {
-            "medicine_id": medicine.medicine_id,
-            "medicine_name": medicine.medicine_name,
-            "generic_name": medicine.generic_name,
-            "description": medicine.description,
-            "weight": medicine.weight,
-            "created_at": str(medicine.created_at),
-            "updated_at": str(medicine.updated_at),
-            "categories": [c.category_name for c in medicine.categories],
-            "tags": [t.name for t in medicine.tags],
-            "side_effects": [s.side_effect for s in medicine.side_effects],
-            "alternatives": [a.name for a in medicine.alternatives],
-            "gst_slab": (medicine.gst_slab.gst_rate if medicine.gst_slab else None),
-        }

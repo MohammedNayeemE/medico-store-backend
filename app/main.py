@@ -21,6 +21,7 @@ from app.api.routes import (
     order_routes,
     payment_routes,
     profile_routes,
+    request_medicines_routes,
     role_routes,
 )
 from app.core.config import allowed_origins, settings
@@ -29,7 +30,6 @@ from app.middlewares.logging_middleware import LoggingMiddleware
 from app.models.inventory_management_models import *
 from app.models.order_management_models import *
 from app.models.user_management_models import *
-from app.schemas.user_schemas import AdminCreate
 from app.services.auth_service import AuthService
 
 auth_manager = AuthService()
@@ -202,3 +202,4 @@ app.include_router(router=order_routes.router)
 app.include_router(router=issues_routes.router)
 app.include_router(router=payment_routes.router)
 app.include_router(router=discount_routes.router)
+app.include_router(router=request_medicines_routes.router)

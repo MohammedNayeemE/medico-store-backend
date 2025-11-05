@@ -108,20 +108,45 @@ async def bulk_upload_medicine(
 
 
 @medicine_router.get(
-    "/", description="List medicines with optional filters and pagination"
+    "/",
+    description="List medicines with optional filters and pagination for the shopping page",
 )
 async def get_all_medicines(
-    current_user=Security(get_current_user, scopes=["admin:read"]),
     db: AsyncSession = Depends(get_postgres),
-    name: Optional[str] = Query(None),
+    search: Optional[str] = Query(None, description="Search by name or description"),
     category: Optional[str] = Query(None),
     tag: Optional[str] = Query(None),
+    min_price: Optional[float] = Query(None),
+    max_price: Optional[float] = Query(None),
+    sort_by: Optional[str] = Query("name", description="Sort by 'price' or 'name'"),
+    order: str = Query("asc", description="Sort order: 'asc' or 'desc'"),
     skip: int = Query(0, ge=0),
     limit: int = Query(10, le=100),
 ):
     result = await inventory_manager.GET_MEDICINES(
-        db=db, name=name, category=category, tag=tag, skip=skip, limit=limit
+        db=db,
+        name=search,
+        category=category,
+        tag=tag,
+        sort_by=sort_by,
+        sort_order=order,
+        skip=skip,
+        limit=limit,
+        min_price=min_price,
+        max_price=max_price,
     )
+    return result
+
+
+@medicine_router.get(
+    "/light", description="List all the medicines with minimal data to optimise the api"
+)
+async def get_all_light_medicines(
+    db: AsyncSession = Depends(get_postgres),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, le=100),
+):
+    result = await inventory_manager.GET_LIGHT_MEDICINES(db=db, skip=skip, limit=limit)
     return result
 
 

@@ -4,10 +4,12 @@ from typing import List
 from bson import ObjectId
 from fastapi import APIRouter, Depends, File, HTTPException, Path, Request, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependecies.get_db_sessions import get_postgres
 from app.core.database import bucket
+from app.models.user_management_models import FileAsset
 from app.services.file_service import FileService
 
 router = APIRouter(prefix="/files", tags=["Files Testing"])
@@ -58,5 +60,15 @@ async def download_multiple_files(
 ):
     result = await file_manager.DOWNLOAD_MULTIPLE_FILES(
         bucket=bucket, file_ids=file_ids
+    )
+    return result
+
+
+@router.get("/assets/{asset_id}", description="Stream a file using asset_id")
+async def get_file_by_asset_id(
+    asset_id: int = Path(...), db: AsyncSession = Depends(get_postgres)
+):
+    result = await file_manager.GET_FILE_BY_ASSET_ID(
+        asset_id=asset_id, db=db, bucket=bucket
     )
     return result

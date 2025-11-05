@@ -19,7 +19,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import relationship
 
 from app.core.database import Base
-from app.models.enums import PrescriptionStatusEnum
+from app.models.enums import PrescriptionStatusEnum, RequestStatusEnum
 
 
 class Category(Base):
@@ -140,6 +140,11 @@ class Medicine(Base):
     )
 
     batches = relationship("MedicineBatch", back_populates="medicine")
+
+    medicine_requests = relationship(
+        "MedicineRequest",
+        back_populates="requested_medicine",
+    )
 
 
 class MedicineImage(Base):
@@ -369,3 +374,42 @@ class CartItem(Base):
 
     cart = relationship("Cart", back_populates="cart_items")
     medicine = relationship("Medicine")
+
+
+class MedicineRequest(Base):
+    __tablename__ = "medicine_requests"
+
+    request_id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(
+        Integer, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False
+    )
+    requested_time = Column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    requested_medicine_id = Column(
+        Integer, ForeignKey("medicines.medicine_id", ondelete="CASCADE"), nullable=False
+    )
+    note_text = Column(Text, nullable=True)
+    note_img = Column(
+        Integer, ForeignKey("file_assets.asset_id", ondelete="SET NULL"), nullable=True
+    )
+    status = Column(
+        Enum(RequestStatusEnum), default=RequestStatusEnum.pending, nullable=False
+    )
+    admin_response = Column(Text, nullable=True)
+    verified_by = Column(
+        Integer, ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True
+    )
+    verified_at = Column(DateTime(timezone=True), nullable=True)
+    is_deleted = Column(Boolean, default=False)
+    deleted_at = Column(DateTime(timezone=True), nullable=True)
+    deleted_by = Column(
+        Integer, ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True
+    )
+
+    # Relationships
+    user = relationship(
+        "User", back_populates="medicine_requests", foreign_keys=[user_id]
+    )
+    requested_medicine = relationship("Medicine", back_populates="medicine_requests")
+    note_image = relationship("FileAsset", lazy="joined", uselist=False)

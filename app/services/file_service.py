@@ -158,3 +158,32 @@ class FileService:
                 status_code=500,
                 detail="internal server error : [download_multiple_files]",
             )
+
+    async def GET_FILE_BY_ASSET_ID(
+        self, asset_id: int, db: AsyncSession, bucket: AsyncIOMotorGridFSBucket
+    ):
+        try:
+            result = await db.execute(
+                select(FileAsset.asset_id, FileAsset.file_url).filter(
+                    FileAsset.asset_id == asset_id
+                )
+            )
+            asset_obj = result.scalar_one_or_none()
+            if not asset_obj:
+                raise HTTPException(status_code=404, detail="file not found")
+            grid_out = await bucket.open_download_stream(ObjectId(asset_obj.file_url))
+            return StreamingResponse(
+                grid_out,
+                media_type=grid_out.metadata.get(
+                    "content_type", "application/octet-stream"
+                ),
+                headers={
+                    "Content-Disposition": f'inline; filename="{asset_obj.file_name}"'
+                },
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            print("=============================")
+            print(f"[get_file_by_asset_id]: {e}")
+            raise HTTPException(status_code=500, detail="Internal server error")

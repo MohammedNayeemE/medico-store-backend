@@ -6,21 +6,23 @@ from app.core import database as db
 CACHE_TTL = 600
 
 
-async def get_cache(key: str):
-    if not db.redis_client:
-        return None
-    data = await db.redis_client.get(key)
-    return json.loads(data) if data else None
+class CacheService:
+    def __init__(self) -> None:
+        self.cache = db.redis_client
 
+    async def get_cache(self, key: str):
+        if not self.cache:
+            return None
+        data = await self.cache.get(key)
+        return json.loads(data) if data else None
 
-async def set_cache(key: str, value: Any, ttl: int = CACHE_TTL):
-    if not db.redis_client:
-        return
-    await db.redis_client.set(key, json.dumps(value, default=str), ex=ttl)
+    async def set_cache(self, key: str, value: Any, ttl: int = CACHE_TTL):
+        if not self.cache:
+            return
+        await self.cache.set(key, json.dumps(value, default=str), ex=ttl)
 
-
-async def invalidate_pattern(pattern: str):
-    if not db.redis_client:
-        return
-    async for key in db.redis_client.scan_iter(match=pattern):
-        await db.redis_client.delete(key)
+    async def invalidate_pattern(self, pattern: str):
+        if not self.cache:
+            return
+        async for key in self.cache.scan_iter(match=pattern):
+            await self.cache.delete(key)
