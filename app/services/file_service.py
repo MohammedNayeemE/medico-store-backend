@@ -3,13 +3,19 @@ import zipfile
 from typing import Dict, List
 
 from bson import ObjectId
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Request, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 from motor.motor_asyncio import AsyncIOMotorGridFSBucket
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import bucket
+from app.core.exceptions import (
+    BadRequestException,
+    ForbiddenException,
+    InternalServerErrorException,
+    NotFoundException,
+)
 from app.models.user_management_models import FileAsset, User
 
 
@@ -28,7 +34,7 @@ class FileService:
             result = await db.execute(select(User).filter(User.user_id == user_id))
             user_obj = result.scalar_one_or_none()
             if not user_obj:
-                raise HTTPException(status_code=404, detail="user-id not found")
+                raise NotFoundException("user-id not found")
             grid_file_id = await bucket.upload_from_stream(
                 file.filename, file.file, metadata={"content_type": file.content_type}
             )
@@ -43,13 +49,18 @@ class FileService:
             db.add(asset)
             await db.commit()
             await db.refresh(asset)
-            return {"asset_id": asset.asset_id, "file_id": file_url}
-        except HTTPException:
+            return {
+                "asset_id": asset.asset_id,
+                "file_id": file_url,
+                "file_name": asset.file_name,
+                "content_type": asset.file_type,
+            }
+        except NotFoundException:
             raise
         except Exception as e:
             print(f"[upload_single_file]: {e}")
-            raise HTTPException(
-                status_code=500, detail="internal server error : [upload_single_file]"
+            raise InternalServerErrorException(
+                "internal server error : [upload_single_file]"
             )
 
     async def UPLOAD_MULTIPLE_FILES(
@@ -61,14 +72,13 @@ class FileService:
     ):
         try:
             if len(files) > 5:
-                raise HTTPException(
-                    status_code=400,
-                    detail="u can upload only 5 files at a time my nigga",
+                raise BadRequestException(
+                    "u can upload only 5 files at a time my nigga"
                 )
             result = await db.execute(select(User).filter(User.user_id == user_id))
             user_obj = result.scalar_one_or_none()
             if not user_obj:
-                raise HTTPException(status_code=404, detail="user id not found")
+                raise NotFoundException("user id not found")
             data: List[Dict[str, str]] = []
             for file in files:
                 grid_file_id = await bucket.upload_from_stream(
@@ -89,15 +99,14 @@ class FileService:
                 data.append({"asset_id": str(asset.asset_id), "file_id": file_url})
             await db.commit()
             return {"data": data}
-        except HTTPException:
+        except (BadRequestException, NotFoundException) as e:
             raise
         except Exception as e:
             print("-------------------")
             print(f"upload_multiple_files: {e}")
             await db.rollback()
-            raise HTTPException(
-                status_code=500,
-                detail="internal server error : [upload_multiple_files]",
+            raise InternalServerErrorException(
+                "internal server error : [upload_multiple_files]"
             )
 
     async def DOWNLOAD_SINGLE_FILE(
@@ -111,12 +120,11 @@ class FileService:
                     "content_type", "application/octet-stream"
                 ),
             )
-        except HTTPException:
-            raise
         except Exception as e:
+            print("-------------------------")
             print(f"[download_single_file] : {e}")
-            raise HTTPException(
-                status_code=500, detail="internal server error : [download_single_file]"
+            raise InternalServerErrorException(
+                "internal server error : [download_single_file]"
             )
 
     async def DOWNLOAD_MULTIPLE_FILES(
@@ -126,7 +134,7 @@ class FileService:
     ):
         try:
             if not file_ids:
-                raise HTTPException(status_code=400, detail="No file IDs provided")
+                raise BadRequestException("No file IDs provided")
             memory_file = io.BytesIO()
             zip_buffer = zipfile.ZipFile(
                 memory_file, mode="w", compression=zipfile.ZIP_DEFLATED
@@ -149,14 +157,13 @@ class FileService:
                     "Content-Disposition": "attachment; filename=downloaded_files.zip"
                 },
             )
-        except HTTPException:
+        except BadRequestException:
             raise
         except Exception as e:
             print("-------------------")
             print(f"[download_multiple_files]: {e}")
-            raise HTTPException(
-                status_code=500,
-                detail="internal server error : [download_multiple_files]",
+            raise InternalServerErrorException(
+                "internal server error : [download_multiple_files]"
             )
 
     async def GET_FILE_BY_ASSET_ID(
@@ -164,13 +171,11 @@ class FileService:
     ):
         try:
             result = await db.execute(
-                select(FileAsset.asset_id, FileAsset.file_url).filter(
-                    FileAsset.asset_id == asset_id
-                )
+                select(FileAsset).filter(FileAsset.asset_id == asset_id)
             )
             asset_obj = result.scalar_one_or_none()
             if not asset_obj:
-                raise HTTPException(status_code=404, detail="file not found")
+                raise NotFoundException("file not found")
             grid_out = await bucket.open_download_stream(ObjectId(asset_obj.file_url))
             return StreamingResponse(
                 grid_out,
@@ -181,9 +186,43 @@ class FileService:
                     "Content-Disposition": f'inline; filename="{asset_obj.file_name}"'
                 },
             )
-        except HTTPException:
+        except NotFoundException:
             raise
         except Exception as e:
             print("=============================")
             print(f"[get_file_by_asset_id]: {e}")
-            raise HTTPException(status_code=500, detail="Internal server error")
+            raise InternalServerErrorException("Internal server error")
+
+    async def GET_PRESCRIPTION(
+        self,
+        asset_id: int,
+        db: AsyncSession,
+        bucket: AsyncIOMotorGridFSBucket,
+        current_user: User,
+    ):
+        try:
+            result = await db.execute(
+                select(FileAsset).filter(FileAsset.asset_id == asset_id)
+            )
+            asset_obj = result.scalar_one_or_none()
+            if not asset_obj:
+                raise NotFoundException("File not Found")
+            if (
+                current_user.role_id != 1
+                and asset_obj.uploaded_by != current_user.user_id
+            ):
+                raise ForbiddenException("Forbidden")
+            grid_out = await bucket.open_download_stream(ObjectId(asset_obj.file_url))
+            return StreamingResponse(
+                grid_out,
+                media_type=grid_out.metadata.get(
+                    "content_type", "application/octet-stream"
+                ),
+                headers={
+                    "Content-Disposition": f'inline; filename="{asset_obj.file_name}"'
+                },
+            )
+        except NotFoundException:
+            raise
+        except Exception as e:
+            pass

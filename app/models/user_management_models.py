@@ -79,9 +79,11 @@ class User(Base):
     )
     sessions = relationship("Session", back_populates="user")
 
+    # ✅ Fixed relationship
     medicine_requests = relationship(
         "MedicineRequest",
         back_populates="user",
+        foreign_keys="MedicineRequest.user_id",
     )
 
 

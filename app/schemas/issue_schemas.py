@@ -27,7 +27,7 @@ class IssueCategoryResponse(IssueCategoryCreate):
 
 
 class IssueCreate(BaseModel):
-    order_id: Optional[int] = Field(None, description="Associated order ID")
+    request_order_id: Optional[int] = Field(None, description="Associated order ID")
     category_id: int = Field(..., description="Category of issue")
     description: str = Field(..., example="The package arrived damaged.")
 
@@ -35,7 +35,7 @@ class IssueCreate(BaseModel):
 class IssueResponse(IssueCreate):
     issue_id: int
     customer_id: int
-    order_id: Optional[int]
+    request_order_id: Optional[int]
     category_id: int
     description: str
     status: IssueStatusEnum
