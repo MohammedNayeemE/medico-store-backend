@@ -46,3 +46,14 @@ class RequestStatusEnum(str, Enum):
     pending = "pending"
     verified = "verified"
     rejected = "rejected"
+
+
+class RequestOrderStatusEnum(str, Enum):
+    pending = "pending"  # 🟡 User submitted request, waiting for admin review
+    approved = "approved"  # 🟢 Admin approved and confirmed items/pricing
+    awaiting_payment = (
+        "awaiting_payment"  # 🟠 Payment link sent, waiting for customer payment
+    )
+    converted = "converted"  # 🔵 Successfully paid and converted into final order
+    rejected = "rejected"  # 🔴 Admin rejected the request (invalid, out of stock, etc.)
+    cancelled = "cancelled"

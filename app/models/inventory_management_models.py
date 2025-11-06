@@ -242,6 +242,7 @@ class MedicineBatch(Base):
     batch_number = Column(String(255), nullable=False)
     expiry_date = Column(Date, nullable=False)
     quantity = Column(Integer, nullable=False)
+    reserved_quantity = Column(Integer, nullable=False, default=0)
     purchase_price = Column(Numeric(12, 2), nullable=False)
     selling_price = Column(Numeric(12, 2), nullable=False)
     created_at = Column(TIMESTAMP, nullable=False, server_default=func.now())
@@ -407,9 +408,10 @@ class MedicineRequest(Base):
         Integer, ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True
     )
 
-    # Relationships
+    # ✅ Explicit foreign key usage
     user = relationship(
         "User", back_populates="medicine_requests", foreign_keys=[user_id]
     )
+
     requested_medicine = relationship("Medicine", back_populates="medicine_requests")
     note_image = relationship("FileAsset", lazy="joined", uselist=False)

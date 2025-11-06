@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependecies.auth import get_current_user
 from app.api.dependecies.get_db_sessions import get_postgres
+from app.models.enums import IssueStatusEnum
 from app.models.user_management_models import User
 from app.schemas.issue_schemas import (
     IssueAssign,
@@ -19,6 +20,7 @@ issue_manager = IssueService()
 
 # ================== ISSUE CATEGORIES ===================== #
 
+
 @router.get("/issue_categories/", description="List all issue categories")
 async def list_issue_categories(
     db: AsyncSession = Depends(get_postgres),
@@ -29,7 +31,9 @@ async def list_issue_categories(
     return result
 
 
-@router.post("/issue_categories/", description="Create a new issue category (admin only)")
+@router.post(
+    "/issue_categories/", description="Create a new issue category (admin only)"
+)
 async def create_issue_category(
     category_data: IssueCategoryCreate = Body(...),
     db: AsyncSession = Depends(get_postgres),
@@ -73,13 +77,15 @@ async def soft_delete_issue_category(
     )
     return result
 
+
 # ================== ISSUES ===================== #
+
 
 @router.post("/create", description="Raise a new issue (customer)")
 async def create_issue(
     issue_data: IssueCreate = Body(...),
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["user:write"]),
+    current_user: User = Security(get_current_user, scopes=["admin:write"]),
 ):
     """Raise an issue for an order, specifying category & description. Customer-initiated."""
     result = await issue_manager.CREATE_ISSUE(
@@ -92,34 +98,36 @@ async def create_issue(
 async def get_issue_details(
     issue_id: int = Path(...),
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["user:read"]),
+    current_user: User = Security(get_current_user, scopes=["admin:read"]),
 ):
     """Fetch all info associated with an issue: status, messages, assignment, etc."""
     result = await issue_manager.GET_ISSUE_DETAILS(db=db, issue_id=issue_id)
     return result
 
 
-@router.get("/customer/{customer_id}", description="List all issues raised by a customer")
+@router.get("/my-issues", description="List all issues raised by a customer")
 async def list_issues_by_customer(
-    customer_id: int = Path(...),
     db: AsyncSession = Depends(get_postgres),
     current_user: User = Security(get_current_user, scopes=["user:read"]),
 ):
     """Get all issues recorded by a particular customer."""
-    result = await issue_manager.LIST_ISSUES_BY_CUSTOMER(
-        db=db, customer_id=customer_id
-    )
+    customer_id: int = current_user.user_id
+    result = await issue_manager.LIST_ISSUES_BY_CUSTOMER(db=db, customer_id=customer_id)
     return result
 
 
-@router.get("/order/{order_id}", description="List issues for a given order")
+@router.get(
+    "/request_order/{request_order_id}", description="List issues for a given order"
+)
 async def list_issues_by_order(
-    order_id: int = Path(...),
+    request_order_id: int = Path(...),
     db: AsyncSession = Depends(get_postgres),
     current_user: User = Security(get_current_user, scopes=["admin:read"]),
 ):
     """Retrieve all issues related to the specified order_id."""
-    result = await issue_manager.LIST_ISSUES_BY_ORDER(db=db, order_id=order_id)
+    result = await issue_manager.LIST_ISSUES_BY_ORDER(
+        db=db, req_order_id=request_order_id
+    )
     return result
 
 
@@ -129,18 +137,20 @@ async def list_issues_by_order(
 )
 async def update_issue_status(
     issue_id: int = Path(...),
-    status_data: IssueStatusUpdate = Body(...),
+    status_data: IssueStatusEnum = Body(...),
     db: AsyncSession = Depends(get_postgres),
     current_user: User = Security(get_current_user, scopes=["admin:write"]),
 ):
     """Update issue status (open, in_progress, resolved, closed)."""
     result = await issue_manager.UPDATE_ISSUE_STATUS(
-        db=db, issue_id=issue_id, status=status_data.status.value
+        db=db, issue_id=issue_id, status=status_data
     )
     return result
 
 
-@router.put("/{issue_id}/assign", description="Assign the issue to a support staff member")
+@router.put(
+    "/{issue_id}/assign", description="Assign the issue to a support staff member"
+)
 async def assign_issue(
     issue_id: int = Path(...),
     assign_data: IssueAssign = Body(...),
@@ -166,7 +176,9 @@ async def soft_delete_issue(
     )
     return result
 
+
 # ========== ISSUE MESSAGES & ATTACHMENTS ========== #
+
 
 @router.post(
     "/{issue_id}/messages", description="Add a message to an issue (customer/support)"
@@ -175,7 +187,7 @@ async def add_issue_message(
     issue_id: int = Path(...),
     message_data: IssueMessageCreate = Body(...),
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["user:write"]),
+    current_user: User = Security(get_current_user, scopes=["admin:write"]),
 ):
     """Add a new message (as customer or support staff) to an existing issue."""
     result = await issue_manager.ADD_ISSUE_MESSAGE(
@@ -191,7 +203,7 @@ async def add_issue_message(
 async def get_issue_messages(
     issue_id: int = Path(...),
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["user:read"]),
+    current_user: User = Security(get_current_user, scopes=["admin:read"]),
 ):
     """Fetch all messages for the specified issue in order."""
     result = await issue_manager.GET_ISSUE_MESSAGES(db=db, issue_id=issue_id)
@@ -206,11 +218,11 @@ async def upload_message_attachment(
     message_id: int = Path(...),
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["user:write"]),
+    current_user: User = Security(get_current_user, scopes=["admin:write"]),
 ):
     """Upload an attachment to an issue message. Only 1 file per call."""
     result = await issue_manager.UPLOAD_MESSAGE_ATTACHMENT(
-        db=db, message_id=message_id, file=file
+        user_id=current_user.user_id, db=db, message_id=message_id, file=file
     )
     return result
 
@@ -225,7 +237,5 @@ async def get_message_attachments(
     current_user: User = Security(get_current_user, scopes=["user:read"]),
 ):
     """Fetch all attachments belonging to a specific issue message."""
-    result = await issue_manager.GET_MESSAGE_ATTACHMENTS(
-        db=db, message_id=message_id
-    )
+    result = await issue_manager.GET_MESSAGE_ATTACHMENTS(db=db, message_id=message_id)
     return result

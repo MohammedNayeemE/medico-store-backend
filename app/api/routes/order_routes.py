@@ -10,100 +10,16 @@ from app.models.enums import OrderStatusEnum
 from app.models.user_management_models import User
 from app.schemas.inventory_schemas import VerifyPrescription
 from app.schemas.order_schemas import OrderCreate, OrderItemCreate, OrderItemUpdate
+from app.services import invoice_service
+from app.services.invoice_service import InvoiceService
 from app.services.order_management_service import OrderService
 
-router = APIRouter(prefix="/orders", tags=["Orders", "Prescriptions"])
+router = APIRouter(prefix="/orders", tags=["Orders"])
 order_manager = OrderService()
-
-# ================== PRESCRIPTIONS ===================== #
-
-
-@router.post(
-    "/prescriptions/upload",
-    description="Upload a new prescription with file and customer_id",
-)
-async def upload_prescription(
-    file: UploadFile = File(...),
-    db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["admin:write"]),
-):
-    result = await order_manager.UPLOAD_PRESCRIPTION(
-        db=db, file=file, customer_id=current_user.user_id, bucket=bucket
-    )
-    return result
+invoice_manager = InvoiceService()
 
 
-@router.get(
-    "/prescriptions/{customer_id}",
-    description="Get all prescriptions for a specific customer",
-)
-async def get_customer_prescriptions(
-    customer_id: int = Path(...),
-    skip: int = Query(0, ge=0, description="range"),
-    limit: int = Query(10, ge=1, le=50, description="Items per page"),
-    db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["admin:read"]),
-):
-    result = await order_manager.GET_CUSTOMER_PRESCRIPTIONS(
-        db=db, customer_id=customer_id, skip=skip, limit=limit
-    )
-    return result
-
-
-@router.get(
-    "/prescriptions/details/{prescription_id}",
-    description="Get prescription details and items",
-)
-async def get_prescription_details(
-    prescription_id: int = Path(...),
-    db: AsyncSession = Depends(get_postgres),
-    current_user=Security(get_current_user, scopes=["admin:read"]),
-):
-    result = await order_manager.GET_PRESCRIPTION_DETAILS(
-        db=db, prescription_id=prescription_id
-    )
-    return result
-
-
-@router.put(
-    "/prescriptions/verify/{prescription_id}",
-    description="Mark prescription as verified or rejected (pharmacist/admin)",
-)
-async def verify_prescription(
-    prescription_id: int = Path(...),
-    prescription_data: VerifyPrescription = Body(...),
-    db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["admin:write"]),
-):
-    result = await order_manager.VERIFY_PRESCRIPTION(
-        db=db,
-        prescription_id=prescription_id,
-        is_verified=prescription_data.is_verified,
-        verified_by=current_user.user_id,
-        notes=prescription_data.notes,
-    )
-    return result
-
-
-@router.delete(
-    "/prescriptions/{prescription_id}", description="Soft delete a prescription"
-)
-async def soft_delete_prescription(
-    prescription_id: int = Path(...),
-    deleted_by: Optional[int] = Body(None, embed=True),
-    db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["admin:write"]),
-):
-    result = order_manager.SOFT_DELETE_PRESCRIPTION(
-        db=db, prescription_id=prescription_id, deleted_by=current_user.user_id
-    )
-    return result
-
-
-# ================== ORDERS ===================== #
-
-
-@router.post("/create", description="Create a new order")
+@router.post("/create", description="Create a new order", include_in_schema=False)
 async def create_order(
     order_data: OrderCreate = Body(...),
     db: AsyncSession = Depends(get_postgres),
@@ -123,21 +39,20 @@ async def get_order_details(
     return result
 
 
-@router.get("/customer/{customer_id}", description="Get all orders for a customer")
+@router.get("/my-orders", description="Get all orders for a customer")
 async def get_customer_orders(
-    customer_id: int = Path(...),
     skip: int = Query(0, ge=0),
     limit: int = Query(10, le=100),
     db: AsyncSession = Depends(get_postgres),
-    current_user=Security(get_current_user, scopes=["admin:read"]),
+    current_user: User = Security(get_current_user, scopes=["admin:read"]),
 ):
     result = await order_manager.GET_CUSTOMER_ORDERS(
-        db=db, customer_id=customer_id, skip=skip, limit=limit
+        db=db, customer_id=current_user.user_id, skip=skip, limit=limit
     )
     return result
 
 
-@router.put("/{order_id}/status", description="Update status of an order")
+@router.patch("/{order_id}/status", description="Update status of an order")
 async def update_order_status(
     order_id: int = Path(...),
     status: OrderStatusEnum = Body(...),
@@ -175,46 +90,6 @@ async def get_order_items(
     return result
 
 
-@router.post("/{order_id}/items/add", description="Add a new item to an existing order")
-async def add_order_item(
-    order_id: int = Path(...),
-    order_item: OrderItemCreate = Body(...),
-    db: AsyncSession = Depends(get_postgres),
-    current_user=Security(get_current_user, scopes=["admin:write"]),
-):
-    result = await order_manager.ADD_ORDER_ITEM(
-        db=db, order_id=order_id, order_item=order_item
-    )
-    return result
-
-
-@router.put(
-    "/order_items/{order_item_id}", description="Update order item quantity or price"
-)
-async def update_order_item(
-    order_item_id: int = Path(...),
-    order_item: OrderItemUpdate = Body(...),
-    db: AsyncSession = Depends(get_postgres),
-    current_user=Security(get_current_user, scopes=["admin:write"]),
-):
-    result = await order_manager.UPDATE_ORDER_ITEM(
-        db=db, order_item_id=order_item_id, order_item=order_item
-    )
-    return result
-
-
-@router.delete("/order_items/{order_item_id}", description="Soft delete an order item")
-async def soft_delete_order_item(
-    order_item_id: int = Path(...),
-    db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["admin:write"]),
-):
-    result = await order_manager.SOFT_DELETE_ORDER_ITEM(
-        db=db, order_item_id=order_item_id, deleted_by=current_user.user_id
-    )
-    return result
-
-
 # ================== INVOICES ===================== #
 
 
@@ -224,14 +99,25 @@ async def soft_delete_order_item(
 )
 async def generate_invoice(
     order_id: int = Path(...),
-    generated_by: Optional[int] = Body(None, embed=True),
-    include_taxes: Optional[bool] = Body(True, embed=True),
-    notes: Optional[str] = Body(None, embed=True),
     db: AsyncSession = Depends(get_postgres),
     current_user=Security(get_current_user, scopes=["admin:write"]),
 ):
-    """Generate an invoice for the given order. Optionally include taxes and notes."""
-    pass
+    result = await invoice_manager.GENERATE_INVOICE(db=db, order_id=order_id)
+    return result
+
+
+@router.get(
+    "/invoices/my-invoices",
+    description="Get all invoices for a specific customer",
+)
+async def get_customer_invoices(
+    db: AsyncSession = Depends(get_postgres),
+    current_user: User = Security(get_current_user, scopes=["admin:read"]),
+):
+    result = await invoice_manager.GET_CUSTOMER_INVOICES(
+        db=db, customer_id=current_user.user_id
+    )
+    return result
 
 
 @router.get(
@@ -243,26 +129,14 @@ async def get_invoice_details(
     db: AsyncSession = Depends(get_postgres),
     current_user=Security(get_current_user, scopes=["admin:read"]),
 ):
-    """Retrieve the invoice record with totals, taxes, items, and status."""
-    pass
-
-
-@router.get(
-    "/invoices/customer/{customer_id}",
-    description="Get all invoices for a specific customer",
-)
-async def get_customer_invoices(
-    customer_id: int = Path(...),
-    db: AsyncSession = Depends(get_postgres),
-    current_user=Security(get_current_user, scopes=["admin:read"]),
-):
-    """List all invoices that belong to the specified customer."""
-    pass
+    result = await invoice_manager.GET_INVOICE_DETAILS(db=db, invoice_id=invoice_id)
+    return result
 
 
 @router.get(
     "/invoices/{invoice_id}/download",
     description="Download invoice as a PDF file",
+    include_in_schema=False,
 )
 async def download_invoice_pdf(
     invoice_id: int = Path(...),
@@ -276,6 +150,7 @@ async def download_invoice_pdf(
 @router.put(
     "/invoices/{invoice_id}/status",
     description="Update invoice/payment status (paid/unpaid)",
+    include_in_schema=False,
 )
 async def update_invoice_status(
     invoice_id: int = Path(...),

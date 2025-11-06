@@ -1,25 +1,38 @@
 from datetime import datetime
+from re import L
 from typing import Optional
 
+from annotated_types import Not
 from fastapi import HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.database import bucket
+from app.core.exceptions import NotFoundException
 from app.models.enums import IssueStatusEnum
-from app.models.order_management_models import (Issue, IssueAttachment,
-                                                IssueCategory, IssueMessage,
-                                                Order)
+from app.models.order_management_models import (
+    Issue,
+    IssueAttachment,
+    IssueCategory,
+    IssueMessage,
+    Order,
+    RequestOrder,
+)
 from app.models.user_management_models import User
-from app.schemas.issue_schemas import (IssueCategoryCreate,
-                                       IssueCategoryUpdate, IssueCreate,
-                                       IssueMessageCreate)
+from app.schemas.issue_schemas import (
+    IssueCategoryCreate,
+    IssueCategoryUpdate,
+    IssueCreate,
+    IssueMessageCreate,
+)
 from app.services.file_service import FileService
 
 
 class IssueService:
     def __init__(self):
         self.file_service = FileService()
+        self.BASE_URL = "http://localhost:8000/api/file_routes/assets"
 
     # ==================== ISSUE CATEGORIES ==================== #
 
@@ -100,15 +113,18 @@ class IssueService:
         self, db: AsyncSession, customer_id: int, issue_data: IssueCreate
     ):
         try:
-            if issue_data.order_id:
-                result = await db.execute(select(Order).filter(Order.order_id == issue_data.order_id))
-                order_obj = result.scalar_one_or_none()
-                if not order_obj:
-                    raise HTTPException(status_code=404, detail="Order not found")
-
+            if issue_data.request_order_id:
+                result = await db.execute(
+                    select(RequestOrder).filter(
+                        RequestOrder.request_order_id == issue_data.request_order_id
+                    )
+                )
+                request_order_obj = result.scalar_one_or_none()
+                if not request_order_obj:
+                    raise NotFoundException("request_order_id not found")
             new_issue = Issue(
                 customer_id=customer_id,
-                order_id=issue_data.order_id,
+                request_order_id=issue_data.request_order_id,
                 category_id=issue_data.category_id,
                 description=issue_data.description,
                 status=IssueStatusEnum.open,
@@ -118,6 +134,8 @@ class IssueService:
             await db.commit()
             await db.refresh(new_issue)
             return new_issue
+        except NotFoundException:
+            raise
         except Exception as e:
             print("============================")
             print(f"[CREATE_ISSUE] Error: {e}")
@@ -132,9 +150,9 @@ class IssueService:
             )
             issue_obj = result.scalar_one_or_none()
             if not issue_obj:
-                raise HTTPException(status_code=404, detail="Issue not found")
+                raise NotFoundException("issue not found")
             return issue_obj
-        except HTTPException:
+        except NotFoundException:
             raise
         except Exception as e:
             print("================================")
@@ -154,11 +172,11 @@ class IssueService:
             print(f"[LIST_ISSUES_BY_CUSTOMER] Error: {e}")
             raise HTTPException(status_code=500, detail="Internal Server Error")
 
-    async def LIST_ISSUES_BY_ORDER(self, db: AsyncSession, order_id: int):
+    async def LIST_ISSUES_BY_ORDER(self, db: AsyncSession, req_order_id: int):
         try:
             result = await db.execute(
                 select(Issue).filter(
-                    Issue.order_id == order_id, Issue.is_deleted == False
+                    Issue.request_order_id == req_order_id, Issue.is_deleted == False
                 )
             )
             return result.scalars().all()
@@ -167,20 +185,22 @@ class IssueService:
             print(f"[LIST_ISSUES_BY_ORDER] Error: {e}")
             raise HTTPException(status_code=500, detail="Internal Server Error")
 
-    async def UPDATE_ISSUE_STATUS(self, db: AsyncSession, issue_id: int, status: str):
+    async def UPDATE_ISSUE_STATUS(
+        self, db: AsyncSession, issue_id: int, status: IssueStatusEnum
+    ):
         try:
             result = await db.execute(select(Issue).filter(Issue.issue_id == issue_id))
             issue_obj = result.scalar_one_or_none()
             if not issue_obj:
-                raise HTTPException(status_code=404, detail="Issue not found")
-
+                raise NotFoundException("Issue Not Found")
             issue_obj.status = status
             if status.lower() == IssueStatusEnum.closed.value:
                 issue_obj.closed_at = datetime.utcnow()
-
             await db.commit()
             await db.refresh(issue_obj)
             return issue_obj
+        except NotFoundException:
+            raise
         except Exception as e:
             print("================================")
             print(f"[UPDATE_ISSUE_STATUS] Error: {e}")
@@ -191,12 +211,13 @@ class IssueService:
             result = await db.execute(select(Issue).filter(Issue.issue_id == issue_id))
             issue_obj = result.scalar_one_or_none()
             if not issue_obj:
-                raise HTTPException(status_code=404, detail="Issue not found")
-
+                raise NotFoundException("Issue id not found")
             issue_obj.assigned_to = assigned_to
             await db.commit()
             await db.refresh(issue_obj)
             return issue_obj
+        except NotFoundException:
+            raise
         except Exception as e:
             print("================================")
             print(f"[ASSIGN_ISSUE] Error: {e}")
@@ -208,13 +229,15 @@ class IssueService:
             issue_obj = result.scalar_one_or_none()
             if not issue_obj:
                 raise HTTPException(status_code=404, detail="Issue not found")
-
             issue_obj.is_deleted = True
             issue_obj.deleted_at = datetime.utcnow()
             issue_obj.deleted_by = deleted_by
             await db.commit()
-        except Exception as e:
             return {"message": f"Issue {issue_id} deleted successfully"}
+        except NotFoundException:
+            raise
+        except Exception as e:
+            print("-------------------------------")
             print(f"[SOFT_DELETE_ISSUE] Error: {e}")
             raise HTTPException(status_code=500, detail="Internal Server Error")
 
@@ -233,20 +256,21 @@ class IssueService:
             )
             issue_obj = result.scalar_one_or_none()
             if not issue_obj:
-                raise HTTPException(status_code=404, detail="Issue not found")
-
+                raise NotFoundException("Issue Not found")
             new_msg = IssueMessage(
                 issue_id=issue_id,
                 sender_id=sender_id,
                 message=message_data.message,
-                message_type=message_data.message_type
+                message_type=message_data.message_type,
             )
             db.add(new_msg)
             await db.commit()
             await db.refresh(new_msg)
             return new_msg
+        except NotFoundException:
+            raise
         except Exception as e:
-            print('==============================')
+            print("==============================")
             print(f"[ADD_ISSUE_MESSAGE] Error: {e}")
             raise HTTPException(status_code=500, detail="Internal Server Error")
 
@@ -261,31 +285,33 @@ class IssueService:
             )
             return result.scalars().all()
         except Exception as e:
-            print('==============================')
+            print("==============================")
             print(f"[GET_ISSUE_MESSAGES] Error: {e}")
             raise HTTPException(status_code=500, detail="Internal Server Error")
 
     # ==================== ATTACHMENTS ==================== #
 
     async def UPLOAD_MESSAGE_ATTACHMENT(
-        self, db: AsyncSession, message_id: int, file: UploadFile
+        self, db: AsyncSession, message_id: int, file: UploadFile, user_id: int
     ):
         try:
             uploaded_file = await self.file_service.UPLOAD_SINGLE_FILE(
-                db=db, file=file, user_id=None
+                db=db, file=file, user_id=user_id, bucket=bucket
             )
+            asset_id = uploaded_file["asset_id"]
+            file_url = f"{self.BASE_URL}/{asset_id}"
             new_attachment = IssueAttachment(
                 message_id=message_id,
-                file_name=file.filename,
-                file_url=uploaded_file.get("url"),
-                file_type=file.content_type,
+                file_name=uploaded_file["file_name"],
+                file_url=file_url,
+                file_type=uploaded_file["content_type"],
             )
             db.add(new_attachment)
             await db.commit()
             await db.refresh(new_attachment)
             return new_attachment
         except Exception as e:
-            print('==============================')
+            print("==============================")
             print(f"[UPLOAD_MESSAGE_ATTACHMENT] Error: {e}")
             raise HTTPException(status_code=500, detail="Internal Server Error")
 
@@ -301,6 +327,6 @@ class IssueService:
             )
             return result.scalars().all()
         except Exception as e:
-            print('==============================')
+            print("==============================")
             print(f"[GET_MESSAGE_ATTACHMENTS] Error: {e}")
             raise HTTPException(status_code=500, detail="Internal Server Error")

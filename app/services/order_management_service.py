@@ -1,25 +1,43 @@
 import json
-from datetime import datetime
+from datetime import date, datetime
 from operator import or_
 from typing import Any, Dict, List, Optional
 
-from fastapi import File, HTTPException, UploadFile
+from fastapi import BackgroundTasks, File, HTTPException, Query, UploadFile
 from fastapi.responses import JSONResponse
 from motor.motor_asyncio import AsyncIOMotorGridFSBucket
-from sqlalchemy import func, or_, select
+from sqlalchemy import asc, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
-from app.models.enums import OrderStatusEnum, PrescriptionStatusEnum
+from app.core.exceptions import NotFoundException
+from app.models.enums import (
+    OrderStatusEnum,
+    PrescriptionStatusEnum,
+    RequestOrderStatusEnum,
+)
 from app.models.inventory_management_models import (
     FamilyMember,
+    Medicine,
     MedicineBatch,
     Prescription,
 )
-from app.models.order_management_models import Order, OrderItem
+from app.models.order_management_models import (
+    Order,
+    OrderItem,
+    RequestOrder,
+    RequestOrderItem,
+)
 from app.models.user_management_models import User
 from app.schemas.order_schemas import OrderCreate, OrderItemCreate, OrderItemUpdate
+from app.schemas.request_order import (
+    RequestOrderApprove,
+    RequestOrderCreate,
+    RequestOrderItemUpdate,
+    RequestOrderResponse,
+)
 from app.services.file_service import FileService
+from app.services.mail_service import MailService
 
 
 class OrderService:
@@ -27,6 +45,13 @@ class OrderService:
         self.file_manager = FileService()
         self.MAX_FILE_SIZE_MB = 10
         self.ALLOWED_CONTENT_TYPES = {"image/png", "image/jpeg", "application/pdf"}
+        self.BASE_FILE_URL = (
+            "http://localhost:8000/api/file_routes/assets/prescriptions"
+        )
+        self.mail_service = MailService()
+
+    def _attach_file_url(self, asset_id: str) -> str:
+        return f"{self.BASE_FILE_URL}/{asset_id}"
 
     async def UPLOAD_PRESCRIPTION(
         self,
@@ -55,7 +80,17 @@ class OrderService:
                 bucket=bucket, db=db, file=file, user_id=customer_id
             )
             asset_id = result["asset_id"]
-            return {"asset_id": asset_id}
+            new_prescription = Prescription(
+                customer_id=customer_id,
+                asset_id=asset_id,
+            )
+            db.add(new_prescription)
+            await db.commit()
+            await db.refresh(new_prescription)
+            return {
+                "prescription_id": new_prescription.prescription_id,
+                "asset_id": self._attach_file_url(asset_id),
+            }
         except HTTPException:
             raise
         except Exception as e:
@@ -98,11 +133,26 @@ class OrderService:
             )
             result = await db.execute(query)
             prescriptions = result.scalars().unique().all()
+            prescription_list = []
+            for p in prescriptions:
+                prescription_list.append(
+                    {
+                        "prescription_id": p.prescription_id,
+                        "customer_id": p.customer_id,
+                        "uploaded_at": p.uploaded_at,
+                        "asset_id": p.asset_id,
+                        "file_url": (
+                            self._attach_file_url(str(p.asset_id))
+                            if p.asset_id
+                            else None
+                        ),
+                    }
+                )
             return {
                 "total": total,
                 "page": skip,
                 "limit": limit,
-                "prescriptions": prescriptions,
+                "prescriptions": prescription_list,
             }
         except HTTPException:
             raise
@@ -132,7 +182,15 @@ class OrderService:
                     status_code=404,
                     detail=f"Prescription ID {prescription_id} not found",
                 )
-            return prescription
+            return {
+                "id": prescription.prescription_id,
+                "prescription": prescription,
+                "file_url": (
+                    self._attach_file_url(str(prescription.asset_id))
+                    if prescription.asset_id
+                    else None
+                ),
+            }
         except HTTPException:
             raise
         except Exception as e:
@@ -177,7 +235,11 @@ class OrderService:
                 print(f"Notes for prescription {prescription_id}: {notes}")
             await db.commit()
             await db.refresh(prescription)
-            return {"prescription": prescription, "notes": notes if notes else ""}
+            return {
+                "id": prescription.prescription_id,
+                "prescription": prescription,
+                "notes": notes if notes else "",
+            }
         except HTTPException:
             raise
         except Exception as e:
@@ -225,6 +287,709 @@ class OrderService:
             raise HTTPException(
                 status_code=500,
                 detail="internal server error: [soft_delete_prescription]",
+            )
+
+    async def CREATE_REQUEST_ORDER(
+        self, db: AsyncSession, request_data: RequestOrderCreate, current_user: User
+    ) -> RequestOrderCreate:
+
+        try:
+            customer_id: int = current_user.user_id
+            if request_data.prescription_id:
+                result = await db.execute(
+                    select(Prescription).filter(
+                        Prescription.prescription_id == request_data.prescription_id,
+                        Prescription.customer_id == customer_id,
+                        Prescription.is_deleted == False,
+                    )
+                )
+                prescription = result.scalar_one_or_none()
+                if not prescription:
+                    raise HTTPException(
+                        status_code=404,
+                        detail="Invalid or unauthorized prescription ID",
+                    )
+            medicine_ids = [item.medicine_id for item in request_data.items]
+            result = await db.execute(
+                select(Medicine.medicine_id).filter(
+                    Medicine.medicine_id.in_(medicine_ids), Medicine.is_deleted == False
+                )
+            )
+            valid_medicines = {row.medicine_id for row in result.all()}
+            missing_ids = [mid for mid in medicine_ids if mid not in valid_medicines]
+            if missing_ids:
+                raise HTTPException(
+                    status_code=404, detail=f"invalid medicine_ids : {missing_ids}"
+                )
+            batch_prices = {}
+            for med_id in medicine_ids:
+                batch_res = await db.execute(
+                    select(MedicineBatch)
+                    .filter(
+                        MedicineBatch.medicine_id == med_id,
+                        MedicineBatch.is_deleted == False,
+                        MedicineBatch.expiry_date >= date.today(),
+                        MedicineBatch.quantity > MedicineBatch.reserved_quantity,
+                    )
+                    .order_by(MedicineBatch.created_at.desc())
+                    .limit(1)
+                )
+                batch = batch_res.scalar_one_or_none()
+                if not batch:
+                    raise NotFoundException(
+                        f"Medicine {med_id} is not available in the stock"
+                    )
+                batch_prices[med_id] = float(batch.selling_price)
+            new_order = RequestOrder(
+                customer_id=customer_id,
+                prescription_id=request_data.prescription_id,
+                remarks=request_data.remarks,
+                status=RequestOrderStatusEnum.pending.value,
+                created_at=datetime.utcnow(),
+                member_id=request_data.member_id,
+            )
+            db.add(new_order)
+            await db.flush()
+            for item in request_data.items:
+                price_per_unit = batch_prices[item.medicine_id]
+                estimated_price = price_per_unit * item.quantity
+                order_item = RequestOrderItem(
+                    request_order_id=new_order.request_order_id,
+                    medicine_id=item.medicine_id,
+                    quantity=item.quantity,
+                    estimated_price=estimated_price,
+                )
+                db.add(order_item)
+            await db.commit()
+            await db.refresh(new_order)
+            response = RequestOrderResponse(
+                request_order_id=new_order.request_order_id,
+                customer_id=new_order.customer_id,
+                member_id=new_order.member_id,
+                prescription_id=new_order.prescription_id,
+                remarks=new_order.remarks,
+                items=request_data.items,
+                status=new_order.status,
+                created_at=new_order.created_at,
+                updated_at=new_order.updated_at,
+                is_deleted=new_order.is_deleted,
+                deleted_at=new_order.deleted_at,
+            )
+            return response
+        except HTTPException:
+            raise
+        except Exception as e:
+            print("========================")
+            print(f"[create_request_order] error: {e}")
+            await db.rollback()
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+    async def GET_MY_REQUEST_ORDERS(
+        self,
+        db: AsyncSession,
+        current_user: User,
+        skip: int = 0,
+        limit: int = Query(10),
+    ):
+        try:
+            customer_id: int = current_user.user_id
+            total_result = await db.execute(
+                select(func.count()).where(
+                    RequestOrder.customer_id == customer_id,
+                    RequestOrder.is_deleted == False,
+                )
+            )
+            total = total_result.scalar() or 0
+            query = (
+                select(RequestOrder)
+                .options(
+                    selectinload(RequestOrder.items),
+                    selectinload(RequestOrder.prescription),
+                )
+                .filter(
+                    RequestOrder.customer_id == customer_id,
+                    RequestOrder.is_deleted == False,
+                )
+                .order_by(RequestOrder.created_at.desc())
+                .offset(skip)
+                .limit(limit)
+            )
+            result = await db.execute(query)
+            request_orders = result.scalars().unique().all()
+            return {"total": total, "orders": request_orders}
+        except HTTPException:
+            raise
+        except Exception as e:
+            print("========================")
+            print(f"[get_my_request_orders] error: {e}")
+            await db.rollback()
+            raise HTTPException(
+                status_code=500,
+                detail="Internal server error : [get_my_request_orders]",
+            )
+
+    async def GET_REQUEST_ORDER_DETAILS(
+        self, db: AsyncSession, request_order_id: int, user_id: int, role_id: int
+    ):
+        try:
+            query = (
+                select(RequestOrder)
+                .options(
+                    selectinload(RequestOrder.items).selectinload(
+                        RequestOrderItem.medicine
+                    ),
+                    selectinload(RequestOrder.prescription),
+                )
+                .filter(
+                    RequestOrder.request_order_id == request_order_id,
+                    RequestOrder.is_deleted == False,
+                )
+            )
+            result = await db.execute(query)
+            request_order = result.scalar_one_or_none()
+            if not request_order:
+                raise HTTPException(status_code=404, detail="Request order not found")
+            if role_id == 1 and request_order.customer_id != user_id:
+                raise HTTPException(
+                    status_code=403,
+                    detail="You are not authorized to view this request order",
+                )
+            order_items = []
+            for item in request_order.items:
+                order_items.append(
+                    {
+                        "request_order_item_id": item.request_order_item_id,
+                        "medicine_id": item.medicine_id,
+                        "medicine_name": item.medicine.name if item.medicine else None,
+                        "quantity": item.quantity,
+                        "estimated_price": float(item.estimated_price or 0),
+                    }
+                )
+            prescription_info = None
+            if request_order.prescription:
+                prescription_info = {
+                    "prescription_id": request_order.prescription.prescription_id,
+                    "file_url": f"http://localhost:8000/api/file_routes/assets/{request_order.prescription.asset_id}",
+                }
+            response = {
+                "request_order_id": request_order.request_order_id,
+                "customer_id": request_order.customer_id,
+                "status": request_order.status,
+                "remarks": request_order.remarks,
+                "prescription": prescription_info,
+                "items": order_items,
+                "created_at": request_order.created_at,
+                "updated_at": request_order.updated_at,
+                "deleted_at": request_order.deleted_at,
+            }
+            return response
+        except HTTPException:
+            raise
+        except Exception as e:
+            print("========================")
+            print(f"[get_request_order_details] error: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail="Internal server error: [get_request_order_details]",
+            )
+
+    async def CANCEL_REQUEST_ORDER(
+        self,
+        db: AsyncSession,
+        request_order_id: int,
+        user_id: int,
+    ):
+        try:
+            result = await db.execute(
+                select(RequestOrder).filter(
+                    RequestOrder.request_order_id == request_order_id,
+                    RequestOrder.is_deleted == False,
+                )
+            )
+            request_order = result.scalar_one_or_none()
+            if not request_order:
+                raise HTTPException(status_code=404, detail="Request order not found")
+            if request_order.customer_id != user_id:
+                raise HTTPException(
+                    status_code=403,
+                    detail="You are not authorized to cancel this order",
+                )
+            if request_order.status not in [
+                RequestOrderStatusEnum.pending,
+                RequestOrderStatusEnum.awaiting_payment,
+                RequestOrderStatusEnum.approved,
+            ]:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot cancel order in status: {request_order.status}",
+                )
+            request_order.status = RequestOrderStatusEnum.cancelled
+            request_order.updated_at = datetime.utcnow()
+            await db.commit()
+            await db.refresh(request_order)
+            return {
+                "message": "Request order cancelled successfully",
+                "request_order_id": request_order.request_order_id,
+                "status": request_order.status,
+                "updated_at": request_order.updated_at,
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            print("========================")
+            print(f"[cancel_request_order] error: {e}")
+            await db.rollback()
+            raise HTTPException(
+                status_code=500,
+                detail="Internal server error: [cancel_request_order]",
+            )
+
+    async def GET_ALL_REQUEST_ORDERS_FOR_ADMIN(
+        self,
+        db: AsyncSession,
+        filters: dict,
+        skip: int = 0,
+        limit: int = 10,
+    ):
+        try:
+            status = filters.get("status")
+            customer_id = filters.get("customer_id")
+            prescription_id = filters.get("prescription_id")
+            search = filters.get("search")
+            date_from = filters.get("date_from")
+            date_to = filters.get("date_to")
+            sort_by = filters.get("sort_by", "created_at")
+            sort_order = filters.get("sort_order", "desc")
+            query = (
+                select(RequestOrder)
+                .options(
+                    selectinload(RequestOrder.customer),
+                    selectinload(RequestOrder.prescription),
+                )
+                .filter(RequestOrder.is_deleted == False)
+            )
+            if status:
+                query = query.filter(RequestOrder.status == status)
+            if customer_id:
+                query = query.filter(RequestOrder.customer_id == customer_id)
+            if prescription_id:
+                query = query.filter(RequestOrder.prescription_id == prescription_id)
+            if search:
+                search_term = f"%{search.lower()}%"
+                query = query.join(User).filter(
+                    or_(
+                        func.lower(User.email).like(search_term),
+                        func.lower(User.phone_number).like(search_term),
+                        func.lower(RequestOrder.remarks).like(search_term),
+                    )
+                )
+            if date_from:
+                try:
+                    start_date = datetime.strptime(date_from, "%Y-%m-%d")
+                    query = query.filter(RequestOrder.created_at >= start_date)
+                except ValueError:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Invalid date_from format. Use YYYY-MM-DD",
+                    )
+            if date_to:
+                try:
+                    end_date = datetime.strptime(date_to, "%Y-%m-%d")
+                    query = query.filter(RequestOrder.created_at <= end_date)
+                except ValueError:
+                    raise HTTPException(
+                        status_code=400, detail="Invalid date_to format. Use YYYY-MM-DD"
+                    )
+            valid_sort_fields = {
+                "created_at": RequestOrder.created_at,
+                "updated_at": RequestOrder.updated_at,
+            }
+            sort_column = valid_sort_fields.get(sort_by, RequestOrder.created_at)
+            query = query.order_by(
+                asc(sort_column) if sort_order == "asc" else desc(sort_column)
+            )
+            count_query = query.with_only_columns(func.count()).order_by(None)
+            total = (await db.execute(count_query)).scalar() or 0
+            query = query.offset(skip).limit(limit)
+            result = await db.execute(query)
+            orders = result.scalars().unique().all()
+            response_orders = []
+            for order in orders:
+                response_orders.append(
+                    {
+                        "request_order_id": order.request_order_id,
+                        "customer": (
+                            {
+                                "user_id": order.customer.user_id,
+                                "email": order.customer.email,
+                                "phone_number": order.customer.phone_number,
+                            }
+                            if order.customer
+                            else None
+                        ),
+                        "prescription_id": order.prescription_id,
+                        "status": order.status,
+                        "remarks": order.remarks,
+                        "created_at": order.created_at,
+                        "updated_at": order.updated_at,
+                    }
+                )
+            return {
+                "total": total,
+                "skip": skip,
+                "limit": limit,
+                "orders": response_orders,
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            print("========================")
+            print(f"[GET_ALL_REQUEST_ORDERS_FOR_ADMIN] error: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail="Internal server error: [GET_ALL_REQUEST_ORDERS_FOR_ADMIN]",
+            )
+
+    async def MODIFY_REQUEST_ORDER_ITEMS(
+        self,
+        db: AsyncSession,
+        request_order_id: int,
+        admin_id: int,
+        items: list[RequestOrderItemUpdate],
+    ):
+        try:
+            result = await db.execute(
+                select(RequestOrder)
+                .options(selectinload(RequestOrder.items))
+                .filter(
+                    RequestOrder.request_order_id == request_order_id,
+                    RequestOrder.is_deleted == False,
+                )
+            )
+            order = result.scalar_one_or_none()
+            if not order:
+                raise HTTPException(status_code=404, detail="Request order not found")
+            if order.status not in [
+                RequestOrderStatusEnum.pending,
+            ]:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot modify items for order in status: {order.status}",
+                )
+            for change in items:
+                action = change.action.lower()
+                if action == "remove":
+                    existing_item = next(
+                        (i for i in order.items if i.medicine_id == change.medicine_id),
+                        None,
+                    )
+                    if not existing_item:
+                        raise HTTPException(
+                            status_code=404,
+                            detail=f"Medicine ID {change.medicine_id} not found in order",
+                        )
+                    await db.delete(existing_item)
+                    continue
+                med_result = await db.execute(
+                    select(Medicine).filter(
+                        Medicine.medicine_id == change.medicine_id,
+                        Medicine.is_deleted == False,
+                    )
+                )
+                medicine = med_result.scalar_one_or_none()
+                if not medicine:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Medicine ID {change.medicine_id} not found",
+                    )
+                existing_item = next(
+                    (i for i in order.items if i.medicine_id == change.medicine_id),
+                    None,
+                )
+                if action == "update":
+                    if not existing_item:
+                        raise HTTPException(
+                            status_code=404,
+                            detail=f"Medicine ID {change.medicine_id} not found in order",
+                        )
+                    if change.quantity is not None:
+                        existing_item.quantity = change.quantity
+                    if change.estimated_price is not None:
+                        existing_item.estimated_price = change.estimated_price
+                    continue
+                if action == "add":
+                    if existing_item:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Medicine ID {change.medicine_id} already exists in order",
+                        )
+                    price = (
+                        float(change.estimated_price)
+                        if change.estimated_price is not None
+                        else float(medicine.price)
+                    )
+                    qty = change.quantity or 1
+                    new_item = RequestOrderItem(
+                        request_order_id=request_order_id,
+                        medicine_id=change.medicine_id,
+                        quantity=qty,
+                        estimated_price=price * qty,
+                    )
+                    db.add(new_item)
+            order.updated_at = datetime.utcnow()
+            await db.commit()
+            await db.refresh(order)
+            return {
+                "message": "Request order items modified successfully",
+                "request_order_id": order.request_order_id,
+                "updated_at": order.updated_at,
+                "total_items": len(order.items),
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            print("========================")
+            print(f"[modify_request_order_items] error: {e}")
+            await db.rollback()
+            raise HTTPException(
+                status_code=500,
+                detail="Internal server error: [modify_request_order_items]",
+            )
+
+    async def APPROVE_REQUEST_ORDER(
+        self,
+        db: AsyncSession,
+        request_order_id: int,
+        admin_id: int,
+        data: RequestOrderApprove,
+    ):
+        try:
+            result = await db.execute(
+                select(RequestOrder)
+                .options(selectinload(RequestOrder.items))
+                .filter(
+                    RequestOrder.request_order_id == request_order_id,
+                    RequestOrder.is_deleted == False,
+                )
+            )
+            order = result.scalar_one_or_none()
+            if not order:
+                raise HTTPException(status_code=404, detail="Request order not found")
+            if order.status not in [
+                RequestOrderStatusEnum.pending,
+                RequestOrderStatusEnum.rejected,
+            ]:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot approve order in status: {order.status}",
+                )
+            if not order.items or len(order.items) == 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot approve an order with no items.",
+                )
+            order.status = RequestOrderStatusEnum.approved.value
+            order.remarks = data.remarks or order.remarks
+            order.updated_at = datetime.utcnow()
+            order.deleted_at = None  # ensure it's active
+            if hasattr(order, "verified_by"):
+                order.verified_by = admin_id
+            if hasattr(order, "verified_at"):
+                order.verified_at = datetime.utcnow()
+            result = await db.execute(
+                select(Prescription).filter(
+                    Prescription.prescription_id == order.prescription_id
+                )
+            )
+            prescription_obj = result.scalar_one_or_none()
+            prescription_obj.status = PrescriptionStatusEnum.verified.value
+            await db.commit()
+            await db.refresh(order)
+            return {
+                "message": "Request order approved successfully",
+                "request_order_id": order.request_order_id,
+                "status": order.status,
+                "approved_by": admin_id,
+                "updated_at": order.updated_at,
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            print("========================")
+            print(f"[approve_request_order] error: {e}")
+            await db.rollback()
+            raise HTTPException(
+                status_code=500,
+                detail="Internal server error: [approve_request_order]",
+            )
+
+    async def REJECT_REQUEST_ORDER(
+        self,
+        db: AsyncSession,
+        request_order_id: int,
+        admin_id: int,
+        reason: str,
+    ):
+        try:
+            result = await db.execute(
+                select(RequestOrder).filter(
+                    RequestOrder.request_order_id == request_order_id,
+                    RequestOrder.is_deleted == False,
+                )
+            )
+            order = result.scalar_one_or_none()
+            if not order:
+                raise HTTPException(status_code=404, detail="Request order not found")
+            if order.status not in [
+                RequestOrderStatusEnum.pending,
+            ]:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot reject order in status: {order.status}",
+                )
+            order.status = RequestOrderStatusEnum.rejected
+            order.remarks = reason
+            order.updated_at = datetime.utcnow()
+            if hasattr(order, "verified_by"):
+                order.verified_by = admin_id
+            if hasattr(order, "verified_at"):
+                order.verified_at = datetime.utcnow()
+            await db.commit()
+            await db.refresh(order)
+            return {
+                "message": "Request order rejected successfully",
+                "request_order_id": order.request_order_id,
+                "status": order.status,
+                "reason": order.remarks,
+                "rejected_by": admin_id,
+                "updated_at": order.updated_at,
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            print("========================")
+            print(f"[reject_request_order] error: {e}")
+            await db.rollback()
+            raise HTTPException(
+                status_code=500,
+                detail="Internal server error: [reject_request_order]",
+            )
+
+    async def CONVERT_REQUEST_TO_ORDER(
+        self,
+        db: AsyncSession,
+        request_order_id: int,
+    ) -> Order:
+        try:
+            result = await db.execute(
+                select(RequestOrder)
+                .options(selectinload(RequestOrder.items))
+                .filter(
+                    RequestOrder.request_order_id == request_order_id,
+                    RequestOrder.is_deleted == False,
+                )
+            )
+            request_order = result.scalar_one_or_none()
+            if not request_order:
+                raise HTTPException(status_code=404, detail="Request order not found")
+            if request_order.status not in (
+                RequestOrderStatusEnum.approved,
+                RequestOrderStatusEnum.awaiting_payment,
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot convert order in status: {request_order.status.value}",
+                )
+            if not request_order.items:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot convert an order with no items.",
+                )
+            total_amount = sum(
+                float(i.estimated_price or 0) for i in request_order.items
+            )
+            new_order = Order(
+                customer_id=request_order.customer_id,
+                member_id=request_order.member_id,
+                prescription_id=request_order.prescription_id,
+                total_amount=total_amount,
+                status=OrderStatusEnum.pending,
+                request_order_id=request_order_id,
+                created_at=datetime.utcnow(),
+            )
+            return new_order
+        except HTTPException:
+            raise
+        except Exception as e:
+            print("========================")
+            print(f"[convert_request_to_order] error: {e}")
+            await db.rollback()
+            raise HTTPException(
+                status_code=500,
+                detail="Internal server error: [convert_request_to_order]",
+            )
+
+    async def SEND_PAYMENT_NOTIFICATION(
+        self,
+        db: AsyncSession,
+        request_order_id: int,
+        admin_id: int,
+        background_tasks: BackgroundTasks,
+    ):
+        try:
+            result = await db.execute(
+                select(RequestOrder).filter(
+                    RequestOrder.request_order_id == request_order_id,
+                    RequestOrder.is_deleted == False,
+                )
+            )
+            order = result.scalar_one_or_none()
+            if not order:
+                raise HTTPException(status_code=404, detail="Request order not found")
+            if order.status != RequestOrderStatusEnum.approved:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot send payment notification for order in status: {order.status}",
+                )
+            order.status = RequestOrderStatusEnum.awaiting_payment.value
+            order.updated_at = datetime.utcnow()
+            if hasattr(order, "verified_by"):
+                order.verified_by = admin_id
+            if hasattr(order, "verified_at"):
+                order.verified_at = datetime.utcnow()
+            await db.commit()
+            await db.refresh(order)
+            result = await db.execute(
+                select(User).filter(User.user_id == order.customer_id)
+            )
+            user_email = result.scalar_one_or_none()
+            user_name = user_email.split("@")[0]
+            link = "dummyURL"
+            background_tasks.add_task(
+                self.mail_service.SEND_PAYMENT_NOTIFICATION_MAIL,
+                user_email,
+                user_name,
+                request_order_id,
+                order.estimated_price,
+                order.prescription_id,
+                link,
+            )
+            return {
+                "message": "Payment notification sent successfully",
+                "request_order_id": order.request_order_id,
+                "status": order.status,
+                "notified_by": admin_id,
+                "updated_at": order.updated_at,
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            print("========================")
+            print(f"[send_payment_notification] error: {e}")
+            await db.rollback()
+            raise HTTPException(
+                status_code=500,
+                detail="Internal server error: [send_payment_notification]",
             )
 
     async def CREATE_ORDER(self, db: AsyncSession, order_data: OrderCreate):

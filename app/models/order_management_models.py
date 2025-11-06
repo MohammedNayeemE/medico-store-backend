@@ -19,7 +19,78 @@ from app.models.enums import (
     IssueStatusEnum,
     OrderStatusEnum,
     PaymentStatusEnum,
+    RequestOrderStatusEnum,
 )
+
+
+# -------------------- RequestOrder -------------------- #
+class RequestOrder(Base):
+    __tablename__ = "request_orders"
+
+    request_order_id = Column(Integer, primary_key=True, autoincrement=True)
+    customer_id = Column(
+        Integer, ForeignKey("users.user_id", onupdate="CASCADE"), nullable=False
+    )
+    member_id = Column(Integer, ForeignKey("family_members.member_id"))
+    prescription_id = Column(
+        Integer, ForeignKey("prescriptions.prescription_id", onupdate="CASCADE")
+    )
+    status = Column(
+        Enum(RequestOrderStatusEnum, name="request_order_status_enum"),
+        nullable=False,
+        server_default=RequestOrderStatusEnum.pending.value,
+    )
+    remarks = Column(Text)
+    created_at = Column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at = Column(TIMESTAMP(timezone=True))
+    is_deleted = Column(Boolean, nullable=False, default=False)
+    deleted_at = Column(TIMESTAMP(timezone=True))
+    deleted_by = Column(Integer, ForeignKey("users.user_id", onupdate="CASCADE"))
+
+    # Relationships
+    customer = relationship(
+        "User", foreign_keys=[customer_id], backref="request_orders"
+    )
+    deleted_user = relationship(
+        "User", foreign_keys=[deleted_by], backref="deleted_request_orders"
+    )
+    member = relationship("FamilyMember")
+    prescription = relationship("Prescription")
+    items = relationship(
+        "RequestOrderItem", back_populates="request_order", cascade="all, delete-orphan"
+    )
+    issues = relationship("Issue", back_populates="request_order")
+
+    # ✅ One-to-one: the 'Order' table holds the FK (request_order_id)
+    final_order = relationship(
+        "Order",
+        back_populates="request_source",
+        uselist=False,
+    )
+
+
+class RequestOrderItem(Base):
+    __tablename__ = "request_order_items"
+
+    request_order_item_id = Column(Integer, primary_key=True, autoincrement=True)
+    request_order_id = Column(
+        Integer,
+        ForeignKey("request_orders.request_order_id", onupdate="CASCADE"),
+        nullable=False,
+    )
+    medicine_id = Column(
+        Integer, ForeignKey("medicines.medicine_id", onupdate="CASCADE"), nullable=False
+    )
+    quantity = Column(Integer, nullable=False)
+    estimated_price = Column(Numeric(12, 2))
+    is_deleted = Column(Boolean, nullable=False, default=False)
+    deleted_at = Column(TIMESTAMP)
+    deleted_by = Column(Integer, ForeignKey("users.user_id", onupdate="CASCADE"))
+
+    request_order = relationship("RequestOrder", back_populates="items")
+    medicine = relationship("Medicine")
 
 
 class Order(Base):
@@ -43,29 +114,36 @@ class Order(Base):
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )
     updated_at = Column(TIMESTAMP(timezone=True))
+    predicted_delivery_date = Column(TIMESTAMP(timezone=True))
+    delivered_date = Column(TIMESTAMP(timezone=True))
     is_deleted = Column(Boolean, nullable=False, default=False)
     deleted_at = Column(TIMESTAMP(timezone=True))
     deleted_by = Column(Integer, ForeignKey("users.user_id", onupdate="CASCADE"))
 
-    # ✅ Relationships
-    customer = relationship(
-        "User",
-        foreign_keys=[customer_id],  # 👈 Tell SQLAlchemy which FK to use
-        backref="orders",  # Optional: lets you access user.orders
+    # ✅ This is the only FK that connects Order → RequestOrder
+    request_order_id = Column(
+        Integer,
+        ForeignKey("request_orders.request_order_id", onupdate="CASCADE"),
+        unique=True,
     )
 
+    # Relationships
+    customer = relationship("User", foreign_keys=[customer_id], backref="orders")
     deleted_user = relationship(
-        "User",
-        foreign_keys=[deleted_by],
-        backref="deleted_orders",  # Optional: lets you access user.deleted_orders
+        "User", foreign_keys=[deleted_by], backref="deleted_orders"
     )
-
     member = relationship("FamilyMember")
     prescription = relationship("Prescription")
     order_items = relationship("OrderItem", back_populates="order")
     payments = relationship("Payment", back_populates="order")
-    issues = relationship("Issue", back_populates="order")
     invoice = relationship("Invoice", back_populates="order", uselist=False)
+
+    # ✅ one-to-one relationship
+    request_source = relationship(
+        "RequestOrder",
+        back_populates="final_order",
+        uselist=False,
+    )
 
 
 class OrderItem(Base):
@@ -85,6 +163,8 @@ class OrderItem(Base):
     is_deleted = Column(Boolean, nullable=False, default=False)
     deleted_at = Column(TIMESTAMP)
     deleted_by = Column(Integer, ForeignKey("users.user_id", onupdate="CASCADE"))
+    is_backordered = Column(Boolean, nullable=False, default=False)
+    backordered_qty = Column(Integer, nullable=False, default=0)
 
     order = relationship("Order", back_populates="order_items")
     batch = relationship("MedicineBatch")
@@ -193,7 +273,9 @@ class Issue(Base):
     customer_id = Column(
         Integer, ForeignKey("users.user_id", onupdate="CASCADE"), nullable=False
     )
-    order_id = Column(Integer, ForeignKey("orders.order_id", onupdate="CASCADE"))
+    request_order_id = Column(
+        Integer, ForeignKey("request_orders.request_order_id", onupdate="CASCADE")
+    )  # ✅ changed
     category_id = Column(
         Integer,
         ForeignKey("issue_categories.category_id", onupdate="CASCADE"),
@@ -214,7 +296,7 @@ class Issue(Base):
     deleted_at = Column(TIMESTAMP)
     deleted_by = Column(Integer, ForeignKey("users.user_id", onupdate="CASCADE"))
 
-    order = relationship("Order", back_populates="issues")
+    request_order = relationship("RequestOrder", back_populates="issues")  # ✅ new link
     category = relationship("IssueCategory", back_populates="issues")
     messages = relationship("IssueMessage", back_populates="issue")
 

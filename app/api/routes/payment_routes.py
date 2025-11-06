@@ -21,13 +21,16 @@ payment_manager = PaymentService()
     description="Start/initiate a payment for an order",
 )
 async def initiate_payment(
-    order_id: int = Body(..., embed=True),
+    request_order_id: int = Body(...),
     method: str = Body(...),
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["user:write"]),
+    current_user: User = Security(get_current_user, scopes=["admin:write"]),
 ):
     result = await payment_manager.INITIATE_PAYMENT(
-        db=db, order_id=order_id, payment_mode=method, user_id=current_user.user_id
+        db=db,
+        request_order_id=request_order_id,
+        payment_mode=method,
+        user_id=current_user.user_id,
     )
     return result
 
@@ -62,13 +65,12 @@ async def update_payment_status(
 
 
 @router.get(
-    "/customer/{customer_id}",
+    "/mypayments",
     description="List payment history for a specific customer",
 )
 async def get_customer_payment_history(
-    customer_id: int = Path(...),
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["user:read"]),
+    current_user: User = Security(get_current_user, scopes=["admin:read"]),
 ):
     result = await payment_manager.GET_CUSTOMER_PAYMENTS(
         db=db, user_id=current_user.user_id
