@@ -1,0 +1,196 @@
+from datetime import datetime
+from typing import List
+
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+
+from app.core.exceptions import (
+    BadRequestException,
+    InternalServerErrorException,
+    NotFoundException,
+)
+from app.models.enums import ReviewStatusEnum
+from app.models.inventory_management_models import Medicine
+from app.models.user_management_models import Review
+from app.schemas.review_schemas import ReviewCreate, ReviewResponse
+
+
+class ReviewService:
+    def __init__(self) -> None:
+        pass
+
+    async def ADD_REVIEW(
+        self,
+        db: AsyncSession,
+        user_id: int,
+        medicine_id: int,
+        review_data: ReviewCreate,
+    ):
+        try:
+            medicine_q = await db.execute(
+                select(Medicine).filter(
+                    Medicine.medicine_id == medicine_id,
+                    Medicine.is_deleted == False,
+                )
+            )
+            medicine = medicine_q.scalar_one_or_none()
+            if not medicine:
+                raise NotFoundException("Medicine not found")
+            existing_review_q = await db.execute(
+                select(Review).filter(
+                    Review.medicine_id == medicine_id,
+                    Review.customer_id == user_id,
+                    Review.is_deleted == False,
+                )
+            )
+            existing_review = existing_review_q.scalar_one_or_none()
+            if existing_review:
+                raise BadRequestException("User has already reviewed this medicine")
+            new_review = Review(
+                customer_id=user_id,
+                medicine_id=medicine_id,
+                rating=review_data.rating,
+                review_text=review_data.review_text,
+                status=ReviewStatusEnum.visible,
+                created_at=datetime.utcnow(),
+            )
+            db.add(new_review)
+            await db.commit()
+            await db.refresh(new_review)
+            return new_review
+        except (NotFoundException, BadRequestException):
+            raise
+        except Exception as e:
+            print("==========================")
+            print(f"[ADD_REVIEW] : {e}")
+            raise InternalServerErrorException("internal server error : [ADD_REVIEW]")
+
+    # -----------------------------------------------------------
+    # GET ALL REVIEWS (public)
+    # -----------------------------------------------------------
+    async def GET_ALL_REVIEWS(self, db: AsyncSession):
+        try:
+            query = await db.execute(
+                select(Review).filter(
+                    Review.is_deleted == False,
+                    Review.status == ReviewStatusEnum.visible,
+                )
+            )
+            reviews = query.scalars().all()
+            return reviews
+        except Exception as e:
+            print("==========================")
+            print(f"[GET_ALL_REVIEWS] : {e}")
+            raise InternalServerErrorException(
+                "internal server error : [GET_ALL_REVIEWS]"
+            )
+
+    # -----------------------------------------------------------
+    # GET REVIEWS FOR A SPECIFIC MEDICINE
+    # -----------------------------------------------------------
+    async def GET_REVIEWS_FOR_MEDICINE(self, db: AsyncSession, medicine_id: int):
+        try:
+            medicine_q = await db.execute(
+                select(Medicine).filter(
+                    Medicine.medicine_id == medicine_id,
+                    Medicine.is_deleted == False,
+                )
+            )
+            medicine = medicine_q.scalar_one_or_none()
+            if not medicine:
+                raise NotFoundException("Medicine not found")
+            reviews_q = await db.execute(
+                select(Review).filter(
+                    Review.medicine_id == medicine_id,
+                    Review.is_deleted == False,
+                    Review.status == ReviewStatusEnum.visible,
+                )
+            )
+            reviews = reviews_q.scalars().all()
+            return reviews
+        except NotFoundException:
+            raise
+        except Exception as e:
+            print("==========================")
+            print(f"[GET_REVIEWS_FOR_MEDICINE] : {e}")
+            raise InternalServerErrorException(
+                "internal server error : [GET_REVIEWS_FOR_MEDICINE]"
+            )
+
+    # -----------------------------------------------------------
+    # GET REVIEW BY ID
+    # -----------------------------------------------------------
+    async def GET_REVIEW_BY_ID(self, db: AsyncSession, review_id: int):
+        try:
+            review_q = await db.execute(
+                select(Review).filter(
+                    Review.review_id == review_id,
+                    Review.is_deleted == False,
+                )
+            )
+            review = review_q.scalar_one_or_none()
+            if not review:
+                raise NotFoundException("Review not found")
+            return review
+        except NotFoundException:
+            raise
+        except Exception as e:
+            print("==========================")
+            print(f"[GET_REVIEW_BY_ID] : {e}")
+            raise InternalServerErrorException(
+                "internal server error : [GET_REVIEW_BY_ID]"
+            )
+
+    # -----------------------------------------------------------
+    # GET REVIEWS BY USER
+    # -----------------------------------------------------------
+    async def GET_REVIEWS_BY_USER(self, db: AsyncSession, user_id: int):
+        try:
+            reviews_q = await db.execute(
+                select(Review).filter(
+                    Review.customer_id == user_id,
+                    Review.is_deleted == False,
+                )
+            )
+            reviews = reviews_q.scalars().all()
+            if not reviews:
+                raise NotFoundException("No reviews found for user")
+            return reviews
+        except NotFoundException:
+            raise
+        except Exception as e:
+            print("==========================")
+            print(f"[GET_REVIEWS_BY_USER] : {e}")
+            raise InternalServerErrorException(
+                "internal server error : [GET_REVIEWS_BY_USER]"
+            )
+
+    # -----------------------------------------------------------
+    # DELETE REVIEW (ADMIN ONLY)
+    # -----------------------------------------------------------
+    async def DELETE_REVIEW(self, db: AsyncSession, review_id: int, deleted_by: int):
+        try:
+            review_q = await db.execute(
+                select(Review).filter(
+                    Review.review_id == review_id,
+                    Review.is_deleted == False,
+                )
+            )
+            review = review_q.scalar_one_or_none()
+            if not review:
+                raise NotFoundException("Review not found")
+
+            review.is_deleted = True
+            review.deleted_at = datetime.utcnow()
+            review.deleted_by = deleted_by
+            review.status = ReviewStatusEnum.deleted
+            await db.commit()
+            return {"message": "Review deleted successfully", "review_id": review_id}
+        except NotFoundException:
+            raise
+        except Exception as e:
+            print("==========================")
+            print(f"[DELETE_REVIEW] : {e}")
+            raise InternalServerErrorException(
+                "internal server error : [DELETE_REVIEW]"
+            )

@@ -25,6 +25,7 @@ from app.api.routes import (
     profile_routes,
     request_medicines_routes,
     request_orders,
+    review_routes,
     role_routes,
 )
 from app.core.config import allowed_origins, settings
@@ -209,3 +210,4 @@ app.include_router(router=issues_routes.router)
 app.include_router(router=payment_routes.router)
 app.include_router(router=discount_routes.router)
 app.include_router(router=request_medicines_routes.router)
+app.include_router(router=review_routes.router)

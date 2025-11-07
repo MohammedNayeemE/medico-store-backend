@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Body, Depends, Path, Query, Security
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, Path, Query, Security
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependecies.auth import get_current_user
@@ -18,7 +18,7 @@ rq_manager = RequestMedicineService()
 @router.post("/", description="Create a new medicine request")
 async def create_medicine_request(
     request_data: MedicineRequestCreate = Body(...),
-    current_user: User = Security(get_current_user, scopes=["customer:write"]),
+    current_user: User = Security(get_current_user, scopes=["admin:write"]),
     db: AsyncSession = Depends(get_postgres),
 ):
     result = await rq_manager.CREATE_MEDICINE_REQUEST(
@@ -29,7 +29,7 @@ async def create_medicine_request(
 
 @router.get("/my", description="Get all medicine requests by the logged-in user")
 async def get_my_medicine_requests(
-    current_user: User = Security(get_current_user, scopes=["customer:read"]),
+    current_user: User = Security(get_current_user, scopes=["admin:read"]),
     db: AsyncSession = Depends(get_postgres),
     skip: int = Query(0, ge=0),
     limit: int = Query(10, le=100),
@@ -43,7 +43,7 @@ async def get_my_medicine_requests(
 @router.get("/{request_id}", description="Get details of a specific medicine request")
 async def get_medicine_request_details(
     request_id: int = Path(...),
-    current_user: User = Security(get_current_user, scopes=["customer:read"]),
+    current_user: User = Security(get_current_user, scopes=["admin:read"]),
     db: AsyncSession = Depends(get_postgres),
 ):
     result = await rq_manager.GET_REQUEST_DETAILS(
@@ -55,7 +55,7 @@ async def get_medicine_request_details(
 @router.delete("/{request_id}", description="Soft delete a specific medicine request")
 async def delete_medicine_request(
     request_id: int = Path(...),
-    current_user: User = Security(get_current_user, scopes=["customer:write"]),
+    current_user: User = Security(get_current_user, scopes=["admin:write"]),
     db: AsyncSession = Depends(get_postgres),
 ):
     result = await rq_manager.SOFT_DELETE_REQUEST(
@@ -83,11 +83,13 @@ async def verify_medicine_request(
     verify_data: MedicineRequestVerify = Body(...),
     current_user: User = Security(get_current_user, scopes=["admin:write"]),
     db: AsyncSession = Depends(get_postgres),
+    background_task=BackgroundTasks(),
 ):
     result = await rq_manager.VERIFY_MEDICINE_REQUEST(
         db=db,
         request_id=request_id,
         admin_id=current_user.user_id,
         verify_data=verify_data,
+        background_tasks=background_task,
     )
     return result

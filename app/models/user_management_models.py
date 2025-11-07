@@ -256,14 +256,12 @@ class Review(Base):
     deleted_at = Column(TIMESTAMP)
     deleted_by = Column(Integer, ForeignKey("users.user_id", onupdate="CASCADE"))
 
-    # ✅ specify which foreign key to use for this relationship
     customer = relationship(
         "User",
         foreign_keys=[customer_id],
         backref="reviews",  # optional: lets you access user.reviews
     )
 
-    # You can also relate the deleter if needed:
     deleted_by_user = relationship(
         "User",
         foreign_keys=[deleted_by],

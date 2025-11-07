@@ -169,6 +169,7 @@ async def notify_payment(
 @router.post(
     "/{request_order_id}/convert",
     description="Convert request order to final order (after payment)",
+    include_in_schema=False,
 )
 async def convert_to_final_order(
     request_order_id: int = Path(...),

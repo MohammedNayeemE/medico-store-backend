@@ -180,6 +180,7 @@ class Payment(Base):
     user_id = Column(
         Integer, ForeignKey("users.user_id", onupdate="CASCADE"), nullable=False
     )
+    transaction_id = Column(String(100))
     amount = Column(Numeric(12, 2), nullable=False)
     status = Column(
         Enum(PaymentStatusEnum, name="payment_status_enum"),

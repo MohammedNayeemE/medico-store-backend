@@ -13,9 +13,6 @@ from app.models.enums import RequestOrderStatusEnum
 class RequestOrderItemCreate(BaseModel):
     medicine_id: int = Field(..., description="ID of the medicine requested")
     quantity: int = Field(..., ge=1, description="Quantity requested for the medicine")
-    estimated_price: Optional[float] = Field(
-        None, description="Estimated cost for the item"
-    )
 
 
 class RequestOrderItemResponse(RequestOrderItemCreate):

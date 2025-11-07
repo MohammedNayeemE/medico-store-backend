@@ -92,7 +92,7 @@ async def simulate_payment_callback(
     return result
 
 
-@router.patch("/{payment_id}/rollback")
+@router.patch("/{payment_id}/rollback", include_in_schema=False)
 async def rollback_payment(
     payment_id: int = Path(...), db: AsyncSession = Depends(get_postgres)
 ):

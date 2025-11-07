@@ -13,10 +13,11 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from motor.motor_asyncio import AsyncIOMotorGridFSBucket
 from pandas.core.api import notna
 from pydantic_settings.sources.providers.aws import import_aws_secrets_manager
-from sqlalchemy import asc, desc, func, or_, select
+from sqlalchemy import and_, asc, desc, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, joinedload, selectinload
 
+from app.core.exceptions import BadRequestException, NotFoundException
 from app.models.inventory_management_models import (
     Alternative,
     Category,
@@ -420,10 +421,8 @@ class InventoryManagementService:
     def _serialize_medicine(self, row):
         """Serialize Medicine + batch info into frontend-friendly dict"""
         medicine, selling_price, quantity, expiry_date = row
-
         thumbnail_url = f"{self.BASE_FILE_URL}/{medicine.image_asset_id if medicine.image_asset_id else -1}"
         low_stock: bool = True if int(quantity) < 50 else False
-
         return {
             "medicine_id": medicine.medicine_id,
             "medicine_name": medicine.medicine_name,
@@ -689,63 +688,200 @@ class InventoryManagementService:
                 status_code=500, detail="internal server error : [soft_delete_medicine]"
             )
 
-    async def LINK_MEDICINE_CATEGORIES(
-        self, db: AsyncSession, medicine_id: int, category_ids: List[int]
-    ):
-        try:
-            pass
-        except HTTPException:
-            raise
-        except Exception as e:
-            print("---------------------")
-            print(f"[link_medicine_categories] : {e}")
-            raise HTTPException(
-                status_code=500,
-                detail="internal server error : [link_medicine_categories]",
-            )
-
-    async def LINK_MEDICINE_TAGS(
-        self, db: AsyncSession, medicine_id: int, tag_ids: List[int]
-    ):
-        try:
-            pass
-        except HTTPException:
-            raise
-        except Exception as e:
-            print("---------------------")
-            print(f"[link_medicine_tags] : {e}")
-            raise HTTPException(
-                status_code=500, detail="internal server error : [link_medicine_tags]"
-            )
-
-    async def LINK_MEDICINE_SIDE_EFFECTS(
-        self, db: AsyncSession, medicine_id: int, side_effect_ids: List[int]
-    ):
-        try:
-            pass
-        except HTTPException:
-            raise
-        except Exception as e:
-            print("---------------------")
-            print(f"[link_medicine_side_effects] : {e}")
-            raise HTTPException(
-                status_code=500,
-                detail="internal server error : [link_medicine_side_effects]",
-            )
-
     async def LINK_MEDICINE_ALTERNATIVES(
-        self, db: AsyncSession, medicine_id: int, alternative_ids: List[int]
+        self, db: AsyncSession, medicine_id: int, alternative_IDS: AlternativeCreate
     ):
         try:
-            pass
-        except HTTPException:
+            medicine_q = await db.execute(
+                select(Medicine).filter(
+                    Medicine.medicine_id == medicine_id, Medicine.is_deleted == False
+                )
+            )
+            medicine_obj = medicine_q.scalars().first()
+            if not medicine_obj:
+                raise HTTPException(status_code=404, detail="Medicine not found")
+            if len(alternative_IDS.medicine_alternative_ids) == 0:
+                raise BadRequestException("no alternative_ids provided")
+            alternative_ids: List[int] = alternative_IDS.medicine_alternative_ids
+            valid_meds_q = await db.execute(
+                select(Medicine.medicine_id).filter(
+                    Medicine.medicine_id.in_(alternative_ids),
+                    Medicine.is_deleted == False,
+                )
+            )
+            valid_medicine_ids = set(valid_meds_q.scalars().all())
+            invalid_ids = set(alternative_ids) - valid_medicine_ids
+            if invalid_ids:
+                raise BadRequestException(
+                    f"Invalid medicine IDs in alternatives: {list(invalid_ids)}"
+                )
+            if medicine_id in valid_medicine_ids:
+                valid_medicine_ids.remove(medicine_id)  # cannot link medicine to itself
+            if not valid_medicine_ids:
+                raise BadRequestException(
+                    "All provided alternative IDs are invalid or same as medicine_id"
+                )
+            for alt_medicine_id in valid_medicine_ids:
+                existing_alt_q = await db.execute(
+                    select(Alternative).filter(
+                        Alternative.name == f"ALT-{alt_medicine_id}",
+                        Alternative.is_deleted == False,
+                    )
+                )
+                alternative = existing_alt_q.scalars().first()
+                if not alternative:
+                    alternative = Alternative(name=f"ALT-{alt_medicine_id}")
+                    db.add(alternative)
+                    await db.flush()
+                link_q = await db.execute(
+                    select(MedicineAlternative).filter(
+                        and_(
+                            MedicineAlternative.medicine_id == medicine_id,
+                            MedicineAlternative.alternative_id
+                            == alternative.alternative_id,
+                            MedicineAlternative.is_deleted == False,
+                        )
+                    )
+                )
+                existing_link = link_q.scalars().first()
+                if not existing_link:
+                    db.add(
+                        MedicineAlternative(
+                            medicine_id=medicine_id,
+                            alternative_id=alternative.alternative_id,
+                        )
+                    )
+            await db.commit()
+            return {
+                "message": "Alternatives linked successfully",
+                "linked_medicine_id": medicine_id,
+                "alternative_ids": list(valid_medicine_ids),
+            }
+        except (BadRequestException, NotFoundException):
             raise
         except Exception as e:
+            await db.rollback()
             print("---------------------")
             print(f"[link_medicine_alternatives] : {e}")
             raise HTTPException(
                 status_code=500,
                 detail="internal server error : [link_medicine_alternatives]",
+            )
+
+    async def LIST_ALL_MEDICINE_ALTERNATIVES(self, db: AsyncSession, medicine_id: int):
+        try:
+            medicine_q = await db.execute(
+                select(Medicine).filter(
+                    Medicine.medicine_id == medicine_id, Medicine.is_deleted == False
+                )
+            )
+            medicine = medicine_q.scalars().first()
+            if not medicine:
+                raise NotFoundException("medicine_id not found")
+            await db.refresh(medicine)
+            alternatives = medicine.alternatives
+            active_alternatives = [
+                {"alternative_id": alt.alternative_id, "name": alt.name}
+                for alt in alternatives
+                if not alt.is_deleted
+            ]
+            return {
+                "medicine_id": medicine.medicine_id,
+                "medicine_name": medicine.medicine_name,
+                "alternatives": active_alternatives,
+                "count": len(active_alternatives),
+            }
+        except NotFoundException:
+            raise
+        except Exception as e:
+            print("---------------------")
+            print(f"[list_all_medicine_alternatives] : {e}")
+            raise HTTPException(
+                status_code=500,
+                detail="internal server error : [list_all_medicine_alternatives]",
+            )
+
+    async def UPDATE_LINK_MEDICINES_TO_ALTERNATIVES(
+        self,
+        db: AsyncSession,
+        alternative_ids: List[int],
+        medicine_id: int,
+        deleted_by: int,
+    ):
+        try:
+            med_q = await db.execute(
+                select(Medicine).filter(
+                    Medicine.medicine_id == medicine_id,
+                    Medicine.is_deleted == False,
+                )
+            )
+            medicine = med_q.scalars().first()
+            if not medicine:
+                raise HTTPException(status_code=404, detail="Medicine not found")
+            if not alternative_ids:
+                raise HTTPException(
+                    status_code=400, detail="No alternative IDs provided"
+                )
+            valid_meds_q = await db.execute(
+                select(Medicine.medicine_id).filter(
+                    Medicine.medicine_id.in_(alternative_ids),
+                    Medicine.is_deleted == False,
+                )
+            )
+            valid_medicine_ids = set(valid_meds_q.scalars().all())
+            invalid_ids = set(alternative_ids) - valid_medicine_ids
+            if invalid_ids:
+                raise BadRequestException("Invalid medicine IDs: {list(invalid_ids)}")
+            if medicine_id in valid_medicine_ids:
+                valid_medicine_ids.remove(medicine_id)  # cannot link medicine to itself
+            if not valid_medicine_ids:
+                raise BadRequestException("No valid alternative medicine IDs provided")
+            await db.execute(
+                update(MedicineAlternative)
+                .where(
+                    MedicineAlternative.medicine_id == medicine_id,
+                    MedicineAlternative.is_deleted == False,
+                )
+                .values(
+                    is_deleted=True,
+                    deleted_at=datetime.utcnow(),
+                    deleted_by=deleted_by,
+                )
+            )
+            for alt_medicine_id in valid_medicine_ids:
+                existing_alt_q = await db.execute(
+                    select(Alternative).filter(
+                        Alternative.name == f"ALT-{alt_medicine_id}",
+                        Alternative.is_deleted == False,
+                    )
+                )
+                alternative = existing_alt_q.scalars().first()
+                if not alternative:
+                    alternative = Alternative(name=f"ALT-{alt_medicine_id}")
+                    db.add(alternative)
+                    await db.flush()
+                db.add(
+                    MedicineAlternative(
+                        medicine_id=medicine_id,
+                        alternative_id=alternative.alternative_id,
+                    )
+                )
+            await db.commit()
+            return {
+                "message": "Medicine alternatives updated successfully",
+                "medicine_id": medicine_id,
+                "new_alternatives": list(valid_medicine_ids),
+                "count": len(valid_medicine_ids),
+            }
+        except BadRequestException:
+            raise
+        except Exception as e:
+            await db.rollback()
+            print("---------------------")
+            print(f"[update_link_medicines_to_alternatives] : {e}")
+            raise HTTPException(
+                status_code=500,
+                detail="internal server error : [update_link_medicines_to_alternatives]",
             )
 
     async def GET_MEDICINE_BATCHES(
@@ -1081,7 +1217,6 @@ class InventoryManagementService:
             await db.commit()
             await db.refresh(tag_obj)
             return tag_obj
-
         except HTTPException:
             raise
         except Exception as e:
@@ -1265,123 +1400,6 @@ class InventoryManagementService:
             raise HTTPException(
                 status_code=500,
                 detail="internal server error : [soft_delete_side_effect]",
-            )
-
-    async def CREATE_ALTERNATIVE(
-        self, db: AsyncSession, alternative_data: AlternativeCreate
-    ):
-        try:
-            result = await db.execute(
-                select(Alternative).filter(Alternative.name == alternative_data.name)
-            )
-            existing_alternative = result.scalar_one_or_none()
-            if existing_alternative:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Alternative already exists, please use a unique name.",
-                )
-            new_alternative = Alternative(name=alternative_data.name)
-            db.add(new_alternative)
-            await db.commit()
-            await db.refresh(new_alternative)
-            return new_alternative
-        except HTTPException:
-            raise
-        except Exception as e:
-            print("-----------------------------")
-            print(f"[CREATE_ALTERNATIVE] : {e}")
-            raise HTTPException(
-                status_code=500, detail="Internal server error: [CREATE_ALTERNATIVE]"
-            )
-
-    async def LIST_ALL_ALTERNATIVES(
-        self, db: AsyncSession, skip: int = 0, limit: int = 10
-    ):
-        try:
-            result = await db.execute(
-                select(Alternative)
-                .filter(Alternative.is_deleted == False)
-                .offset(skip)
-                .limit(limit)
-            )
-            alternatives = result.scalars().all()
-            return alternatives
-        except Exception as e:
-            print("-----------------------------")
-            print(f"[LIST_ALL_ALTERNATIVES] : {e}")
-            raise HTTPException(
-                status_code=500, detail="Internal server error: [LIST_ALL_ALTERNATIVES]"
-            )
-
-    async def GET_ALTERNATIVE_BY_ID(self, db: AsyncSession, alternative_id: int):
-        try:
-            result = await db.execute(
-                select(Alternative).filter(
-                    Alternative.alternative_id == alternative_id,
-                    Alternative.is_deleted == False,
-                )
-            )
-            alternative = result.scalar_one_or_none()
-            if not alternative:
-                raise HTTPException(status_code=404, detail="Alternative not found.")
-            return alternative
-        except HTTPException:
-            raise
-        except Exception as e:
-            print("-----------------------------")
-            print(f"[GET_ALTERNATIVE_BY_ID] : {e}")
-            raise HTTPException(
-                status_code=500, detail="Internal server error: [GET_ALTERNATIVE_BY_ID]"
-            )
-
-    async def UPDATE_ALTERNATIVE(
-        self, db: AsyncSession, alternative_id: int, alternative_data: AlternativeCreate
-    ):
-        try:
-            result = await db.execute(
-                select(Alternative).filter(Alternative.alternative_id == alternative_id)
-            )
-            alternative_obj = result.scalar_one_or_none()
-            if not alternative_obj:
-                raise HTTPException(status_code=404, detail="Alternative not found.")
-            if alternative_data.name is not None:
-                alternative_obj.name = alternative_data.name
-            await db.commit()
-            await db.refresh(alternative_obj)
-            return alternative_obj
-        except HTTPException:
-            raise
-        except Exception as e:
-            print("-----------------------------")
-            print(f"[UPDATE_ALTERNATIVE] : {e}")
-            raise HTTPException(
-                status_code=500, detail="Internal server error: [UPDATE_ALTERNATIVE]"
-            )
-
-    async def SOFT_DELETE_ALTERNATIVE(
-        self, db: AsyncSession, alternative_id: int, deleted_by: int
-    ):
-        try:
-            result = await db.execute(
-                select(Alternative).filter(Alternative.alternative_id == alternative_id)
-            )
-            alternative_obj = result.scalar_one_or_none()
-            if not alternative_obj:
-                raise HTTPException(status_code=404, detail="Alternative not found.")
-            alternative_obj.is_deleted = True
-            alternative_obj.deleted_at = datetime.utcnow()
-            alternative_obj.deleted_by = deleted_by
-            await db.commit()
-            await db.refresh(alternative_obj)
-            return {"message": "Alternative deleted successfully."}
-        except HTTPException:
-            raise
-        except Exception as e:
-            print("-----------------------------")
-            print(f"[SOFT_DELETE_ALTERNATIVE] : {e}")
-            raise HTTPException(
-                status_code=500,
-                detail="Internal server error: [SOFT_DELETE_ALTERNATIVE]",
             )
 
     async def CREATE_GST_SLAB(self, db: AsyncSession, gst_slab_data: GSTSlabCreate):

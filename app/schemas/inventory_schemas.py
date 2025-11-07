@@ -81,7 +81,7 @@ class SideEffectResponse(SideEffectCreate):
 
 
 class AlternativeCreate(BaseModel):
-    name: str
+    medicine_alternative_ids: List[int]
 
 
 class AlternativeResponse(AlternativeCreate):

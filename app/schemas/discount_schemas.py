@@ -36,10 +36,10 @@ class DiscountCreate(BaseModel):
     medicine_ids: Optional[List[int]] = []
     parameters: Optional[List[dict]] = []
 
-    # outdated function needs to be changed
     @field_validator("end_date")
-    def validate_dates(cls, end_date, values):
-        if "start_date" in values and end_date <= values["start_date"]:
+    def validate_dates(cls, end_date, info):
+        start_date = info.data.get("start_date")
+        if start_date and end_date <= start_date:
             raise ValueError("end_date must be after start_date")
         return end_date
 
