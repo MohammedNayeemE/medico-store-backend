@@ -29,16 +29,6 @@ async def create_order(
     return result
 
 
-@router.get("/{order_id}", description="Get order details (items, payment, invoice)")
-async def get_order_details(
-    order_id: int = Path(...),
-    db: AsyncSession = Depends(get_postgres),
-    current_user=Security(get_current_user, scopes=["admin:read"]),
-):
-    result = await order_manager.GET_ORDER_DETAILS(db=db, order_id=order_id)
-    return result
-
-
 @router.get("/my-orders", description="Get all orders for a customer")
 async def get_customer_orders(
     skip: int = Query(0, ge=0),
@@ -49,6 +39,16 @@ async def get_customer_orders(
     result = await order_manager.GET_CUSTOMER_ORDERS(
         db=db, customer_id=current_user.user_id, skip=skip, limit=limit
     )
+    return result
+
+
+@router.get("/{order_id}", description="Get order details (items, payment, invoice)")
+async def get_order_details(
+    order_id: int = Path(...),
+    db: AsyncSession = Depends(get_postgres),
+    current_user=Security(get_current_user, scopes=["admin:read"]),
+):
+    result = await order_manager.GET_ORDER_DETAILS(db=db, order_id=order_id)
     return result
 
 

@@ -10,15 +10,15 @@ class UserCreate(BaseModel):
     phone_number: str
     role_id: int
 
-    @field_validator("phone_number")
-    def validate_phone_number(cls, v):
-        pattern = r"^[6-9]\d{9}$"
-        if not re.match(pattern, v):
-            raise ValueError(
-                "Invalid phone number. Must be 10 digits and start with 6–9."
-            )
-        return v
-
+    # @field_validator("phone_number")
+    # def validate_phone_number(cls, v):
+    #     pattern = r"^[6-9]\d{9}$"
+    #     if not re.match(pattern, v):
+    #         raise ValueError(
+    #             "Invalid phone number. Must be 10 digits and start with 6–9."
+    #         )
+    #     return v
+    #
     @field_validator("otp")
     def validate_otp(cls, v):
         pattern = r"^\d{6}$"
@@ -87,14 +87,14 @@ class RoleResponse(RoleCreate):
 class OtpRequest(BaseModel):
     phone_number: str
 
-    @field_validator("phone_number")
-    def validate_phone_number(cls, v):
-        pattern = r"^[6-9]\d{9}$"
-        if not re.match(pattern, v):
-            raise ValueError(
-                "Invalid phone number. Must be 10 digits and start with 6–9."
-            )
-        return v
+    # @field_validator("phone_number")
+    # def validate_phone_number(cls, v):
+    #     pattern = r"^[6-9]\d{9}$"
+    #     if not re.match(pattern, v):
+    #         raise ValueError(
+    #             "Invalid phone number. Must be 10 digits and start with 6–9."
+    #         )
+    #     return v
 
 
 class CustomerProfileCreate(BaseModel):

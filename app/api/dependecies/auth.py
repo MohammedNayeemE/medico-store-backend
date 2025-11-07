@@ -21,6 +21,7 @@ from app.models.user_management_models import (
     User,
 )
 from app.services.auth_service import AuthService
+from app.services.cache_service import CacheService
 
 auth_manager = AuthService()
 
@@ -43,6 +44,29 @@ oauth2_scheme = OAuth2PasswordBearer(
 )
 
 
+async def get_permissions_for_role(db: AsyncSession, role_id: int):
+    """
+    Fetch permissions for a given role. Cache in Redis for performance.
+    """
+    CACHE_PREFIX = "permissions:role:"
+    cache = CacheService()
+    cache_key = f"{CACHE_PREFIX}{role_id}"
+    cached = await cache.get_cache(cache_key)
+    if cached:
+        return cached
+    result = await db.execute(
+        select(Role)
+        .options(selectinload(Role.permissions))
+        .filter(Role.role_id == role_id)
+    )
+    role = result.scalar_one_or_none()
+    if not role:
+        return []
+    permissions = [perm.name for perm in role.permissions]
+    await cache.set_cache(cache_key, permissions)
+    return permissions
+
+
 async def get_current_user(
     security_scopes: SecurityScopes,
     token: str = Depends(oauth2_scheme),
@@ -61,6 +85,7 @@ async def get_current_user(
         user_id = payload.get("sub")
         token_scopes = payload.get("scopes", [])
         jti = payload.get("jti")
+        role_id = payload.get("role_id")
         if user_id is None or jti is None:
             raise credentials_exception
         user_id = int(user_id)
@@ -74,17 +99,6 @@ async def get_current_user(
     if not jti:
         raise credentials_exception
     result = await db.execute(
-        select(Session)
-        .filter(Session.refresh_token_jti == jti)
-        .filter(Session.expires_at > datetime.utcnow())
-    )
-    session = result.scalar_one_or_none()
-    if not session:
-        raise HTTPException(
-            status_code=401,
-            detail="Session expired or invalid. Please log in again.",
-        )
-    result = await db.execute(
         select(User)
         .options(selectinload(User.role).selectinload(Role.permissions))
         .filter(User.user_id == user_id)
@@ -92,7 +106,7 @@ async def get_current_user(
     user = result.scalar_one_or_none()
     if not user:
         raise credentials_exception
-    db_permissions = [perm.name for perm in user.role.permissions]
+    db_permissions = await get_permissions_for_role(db=db, role_id=role_id)
     required_scopes = set(security_scopes.scopes)
     granted_scopes = set(token_scopes) | set(db_permissions)
     missing_scopes = required_scopes - granted_scopes

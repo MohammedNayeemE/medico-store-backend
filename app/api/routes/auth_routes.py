@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from app.api.dependecies.auth import get_current_user, oauth2_scheme
-from app.api.dependecies.get_db_sessions import get_postgres
+from app.api.dependecies.get_db_sessions import get_postgres, get_redis_client
 from app.core.config import settings
 from app.core.database import otp_store
 from app.models.user_management_models import User
@@ -127,12 +127,9 @@ async def logout_all(
 
 
 @router.post("/get-otp", description="Generate and send an OTP for phone verification")
-async def get_otp(data: OtpRequest):
-    otp = random.randint(100000, 999999)
-    expiry = datetime.utcnow() + timedelta(minutes=5)
-    otp_store[data.phone_number] = {"otp": str(otp), "expires": expiry}
-    print(f"otp : {otp} sent")
-    return JSONResponse(status_code=200, content={"msg": "otp sent successfully"})
+async def get_otp(data: OtpRequest, redis=Depends(get_redis_client)):
+    result = await auth.GET_OTP(data=data, redis_client=redis)
+    return result
 
 
 @router.post("/login", description="Authenticate user and issue access tokens")
@@ -143,17 +140,22 @@ async def user_login(
     return result
 
 
-@router.post("/user-logout", description="Logout user and revoke the access token")
-async def user_logout(
-    token: str = Depends(oauth2_scheme),
-    db: AsyncSession = Depends(get_postgres),
-    current_user=Security(get_current_user, scopes=["customer:write"]),
-):
-    result = await auth.LOGOUT_USER(token=token, db=db)
-    return result
+#
+# @router.post("/user-logout", description="Logout user and revoke the access token")
+# async def user_logout(
+#     token: str = Depends(oauth2_scheme),
+#     db: AsyncSession = Depends(get_postgres),
+#     current_user=Security(get_current_user, scopes=["customer:write"]),
+# ):
+#     result = await auth.LOGOUT_USER(token=token, db=db)
+#     return result
 
 
 @router.post("/refresh")
-async def refresh_token(request: Request, db: AsyncSession = Depends(get_postgres)):
+async def refresh_token(
+    request: Request,
+    db: AsyncSession = Depends(get_postgres),
+    current_user=Security(get_current_user, scopes=["customer:write"]),
+):
     result = await auth.REFRESH_TOKEN(db=db, request=request)
     return result

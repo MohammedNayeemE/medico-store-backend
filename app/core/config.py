@@ -23,6 +23,15 @@ class Settings(BaseSettings):
     MAIL_FROM: str = ""
     MAIL_PORT: int = 587
     MAIL_SERVER: str = "smtp.gmail.com"
+    BACKUP_DIR: str = ""
+    RESTORE_DIR: str = ""
+    POSTGRES_HOST: str = ""
+    POSTGRES_USER: str = ""
+    POSTGRES_DB: str = ""
+    MONGO_URI: str = ""
+    TWILIO_ACCOUNT_SID: str = ""
+    TWILIO_AUTH_TOKEN: str = ""
+    TWILIO_PHONE_NUMBER: str = ""
     model_config = SettingsConfigDict(env_file=".env")
 
 

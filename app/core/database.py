@@ -44,3 +44,9 @@ async def close_redis():
     if redis_client:
         await redis_client.close()
         redis_client = None
+
+
+def get_redis():
+    if redis_client is None:
+        raise RuntimeError("Redis not initialized. Run init_redis() first.")
+    return redis_client

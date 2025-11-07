@@ -57,3 +57,9 @@ class RequestOrderStatusEnum(str, Enum):
     converted = "converted"  # 🔵 Successfully paid and converted into final order
     rejected = "rejected"  # 🔴 Admin rejected the request (invalid, out of stock, etc.)
     cancelled = "cancelled"
+
+
+class NotificationType(str, Enum):
+    info = "info"
+    alert = "alert"
+    request = "request"

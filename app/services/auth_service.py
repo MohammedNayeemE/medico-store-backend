@@ -1,3 +1,4 @@
+import random
 import uuid
 from datetime import datetime, datetime_CAPI, timedelta
 from typing import Tuple
@@ -12,10 +13,10 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from starlette.types import HTTPExceptionHandler
+from twilio.rest import Client
 
 from app.api.dependecies.get_db_sessions import get_postgres
 from app.core.config import settings
-from app.core.database import otp_store
 from app.models.user_management_models import (
     PasswordReset,
     RevokedToken,
@@ -23,7 +24,12 @@ from app.models.user_management_models import (
     Session,
     User,
 )
-from app.schemas.user_schemas import AdminCreate, OnBoardEmployee, UserCreate
+from app.schemas.user_schemas import (
+    AdminCreate,
+    OnBoardEmployee,
+    OtpRequest,
+    UserCreate,
+)
 
 
 class AuthService:
@@ -48,25 +54,25 @@ class AuthService:
         payload = jwt.decode(token, secret_key, algorithms=[algorithm])
         return payload
 
-    def create_access_token(self, user: User, refresh_token_jti: str) -> str:
+    async def create_access_token(self, user: User) -> str:
         jti = str(uuid.uuid4())
         payload = {
             "sub": str(user.user_id),
-            "scopes": [perm.name for perm in user.role.permissions],
+            "role_id": user.role_id,
             "exp": datetime.utcnow()
             + timedelta(minutes=self.ACCESS_TOKEN_EXPIRE_MINUTES),
-            "jti": refresh_token_jti,
+            "jti": jti,
         }
         return jwt.encode(payload, self.A_SECRET_KEY, algorithm=self.ALGORITHM)
 
-    def create_refresh_token(self, user: User) -> Tuple[str, str, datetime]:
+    async def create_refresh_token(self, user: User) -> Tuple[str, str, datetime]:
         jti = str(uuid.uuid4())
         expiration_dt = datetime.utcnow() + timedelta(
             minutes=self.REFRESH_TOKEN_EXPIRE_DAYS
         )
         payload = {
             "sub": str(user.user_id),
-            "scopes": [perm.name for perm in user.role.permissions],
+            "role_id": user.role_id,
             "exp": expiration_dt,
             "jti": jti,
         }
@@ -140,12 +146,10 @@ class AuthService:
             admin_hashed_password: str = str(admin_obj.password_hash)
             if not self.verify_password(admin.password, admin_hashed_password):
                 raise HTTPException(status_code=401, detail="the password is wrong")
-            refresh_token, refresh_token_jti, expires_at = self.create_refresh_token(
-                admin_obj
+            refresh_token, refresh_token_jti, expires_at = (
+                await self.create_refresh_token(admin_obj)
             )
-            access_token = self.create_access_token(
-                admin_obj, refresh_token_jti=refresh_token_jti
-            )
+            access_token = await self.create_access_token(admin_obj)
             user_agent = request.headers.get("user-agent", "unknown")
             client_ip = request.client.host if request.client else "unknown"
             session = Session(
@@ -275,18 +279,39 @@ class AuthService:
                 status_code=500, detail="internal server error : [LOGOUT_ALL]"
             )
 
+    async def GET_OTP(self, data: OtpRequest, redis_client):
+        try:
+            otp = random.randint(100000, 999999)
+            expiry_seconds = 300  # 5 minutes
+            await redis_client.setex(
+                f"otp:{data.phone_number}", expiry_seconds, str(otp)
+            )
+            # client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+            # message = client.messages.create(
+            #     body=f"Your verification OTP is {otp}. It will expire in 5 minutes.",
+            #     from_=settings.TWILIO_PHONE_NUMBER,
+            #     to=data.phone_number,
+            # )
+            print(f"[OTP] Sent {otp} to {data.phone_number} | Twilio SID: ")
+            return JSONResponse(
+                status_code=200, content={"msg": "OTP sent successfully"}
+            )
+        except Exception as e:
+            print("================================")
+            print(f"[get-otp error] {e}")
+            raise HTTPException(status_code=500, detail="Failed to send OTP")
+
     async def LOGIN_USER(
         self, request: Request, user_data: UserCreate, db: AsyncSession
     ):
         try:
-            if user_data.phone_number not in otp_store:
-                raise HTTPException(
-                    status_code=404, detail="number is not found for sending otp"
-                )
-            if otp_store[user_data]["otp"] != user_data.otp:
+            phone_key = f"otp:{user_data.phone_number}"
+            stored_otp = await redis_client.get(phone_key)
+            if not stored_otp:
+                raise HTTPException(status_code=404, detail="OTP found or expired")
+            if stored_otp != str(user_data.otp):
                 raise HTTPException(status_code=400, detail="Invalid OTP")
-            if otp_store[user_data]["expires"] < datetime.utcnow():
-                raise HTTPException(status_code=400, detail="otp expired")
+            await redis_client.delete(phone_key)
             result = await db.execute(
                 select(User).filter(User.phone_number == user_data.phone_number)
             )
@@ -302,11 +327,12 @@ class AuthService:
                 await db.refresh(new_user)
                 user_obj = new_user
             access_token = self.create_access_token(user_obj)
-            refresh_token, expires_at = self.create_refresh_token(user_obj)
+            refresh_token, jti, expires_at = self.create_refresh_token(user_obj)
             user_agent = request.headers.get("user-agent", "unknown")
             client_ip = request.client.host if request.client else "unknown"
             session = Session(
                 user_id=user_obj.user_id,
+                refresh_token_jti=jti,
                 refresh_token=refresh_token,
                 device_info=user_agent,
                 ip_address=client_ip,
@@ -314,7 +340,6 @@ class AuthService:
             )
             db.add(session)
             await db.commit()
-            del otp_store[user_data.phone_number]
             return JSONResponse(
                 status_code=200,
                 content={
@@ -327,6 +352,7 @@ class AuthService:
         except HTTPException:
             raise
         except Exception as e:
+            print("============================")
             print(f"[user-login] : {e}")
             raise HTTPException(
                 status_code=500, detail="internal server error : [user_login]"
@@ -516,8 +542,10 @@ class AuthService:
             user_obj = result.scalar_one_or_none()
             if not user_obj:
                 raise HTTPException(status_code=404, detail="user id not found")
-            new_refresh_token, new_jti, expiry = self.create_refresh_token(user_obj)
-            new_access_token = self.create_access_token(user_obj, new_jti)
+            new_refresh_token, new_jti, expiry = await self.create_refresh_token(
+                user_obj
+            )
+            new_access_token = self.create_access_token(user_obj)
             await self.revoke_token(db=db, jti=jti)
             session_obj.is_revoked = True
             user_agent = request.headers.get("user-agent", "unknown")
@@ -530,7 +558,14 @@ class AuthService:
                 ip_address=client_ip,
                 expires_at=expiry,
             )
-            response = JSONResponse(status_code=200, content={"msg": "token refreshed"})
+            response = JSONResponse(
+                status_code=200,
+                content={
+                    "msg": "token refreshed",
+                    "access_token": new_access_token,
+                    "token_type": "bearer",
+                },
+            )
             response.set_cookie(
                 key="refresh_token",
                 value=refresh_token,
