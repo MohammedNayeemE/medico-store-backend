@@ -204,6 +204,7 @@ class Address(Base):
     is_deleted = Column(Boolean, nullable=False, default=False)
     deleted_at = Column(DateTime(timezone=True))
     deleted_by = Column(Integer)
+    is_primary = Column(Boolean, default=True)
 
     user = relationship("User")
     address_type = relationship("AddressType", back_populates="addresses")

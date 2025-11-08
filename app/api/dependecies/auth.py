@@ -20,7 +20,7 @@ from app.models.user_management_models import (
     Session,
     User,
 )
-from app.services.auth_service import AuthService
+from app.services.auth_management.auth_service import AuthService
 from app.services.cache_service import CacheService
 
 auth_manager = AuthService()

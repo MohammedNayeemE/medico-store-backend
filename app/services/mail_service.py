@@ -35,6 +35,21 @@ class MailService:
         fast_mail_obj = FastMail(self.mail_conf)
         await fast_mail_obj.send_message(message=message)
 
+    async def SEND_RESET_TOKEN(self, email: str, link: str):
+        message = MessageSchema(
+            subject="Welcome to Medico Store your modern AI Powered E-Pharmacy Team",
+            recipients=[email],
+            body=f"""
+                <h3>Don't We Got You!</h3>
+                <p>Click the link below to reset your password</p>
+                <a href="{link}">{link}</a>
+                """,
+            subtype="html",
+        )
+
+        fast_mail_obj = FastMail(self.mail_conf)
+        await fast_mail_obj.send_message(message=message)
+
     async def SEND_MEDICINE_REQUEST_STATUS_MAIL(
         self,
         user_email: EmailStr,

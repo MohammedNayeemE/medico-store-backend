@@ -4,7 +4,7 @@ from datetime import datetime, datetime_CAPI, timedelta
 from typing import Tuple
 
 import httpx
-from fastapi import Depends, HTTPException, Request, Response
+from fastapi import BackgroundTasks, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from jose import JWTError, jwt
 from jose.exceptions import ExpiredSignatureError
@@ -30,6 +30,7 @@ from app.schemas.user_schemas import (
     OtpRequest,
     UserCreate,
 )
+from app.services.mail_service import MailService
 
 
 class AuthService:
@@ -43,6 +44,7 @@ class AuthService:
         self.PASSWORD_RESET_EXPIRE_MINUTES = 15
         self.CAPTCHA_BYPASS = settings.CAPTCHA_BYPASS
         self.RECAPTCHA_SECRET_KEY = settings.RECAPTCHA_SECRET_KEY
+        self.mail_service = MailService()
 
     def verify_password(self, plain: str, hashed: str) -> bool:
         return self.pwd_context.verify(plain, hashed)
@@ -326,8 +328,8 @@ class AuthService:
                 await db.commit()
                 await db.refresh(new_user)
                 user_obj = new_user
-            access_token = self.create_access_token(user_obj)
-            refresh_token, jti, expires_at = self.create_refresh_token(user_obj)
+            access_token = await self.create_access_token(user_obj)
+            refresh_token, jti, expires_at = await self.create_refresh_token(user_obj)
             user_agent = request.headers.get("user-agent", "unknown")
             client_ip = request.client.host if request.client else "unknown"
             session = Session(
@@ -428,7 +430,9 @@ class AuthService:
         except Exception as e:
             raise HTTPException(status_code=500, detail="internal server error : {e}")
 
-    async def FORGOT_PASSWORD(self, email: str, db: AsyncSession):
+    async def FORGOT_PASSWORD(
+        self, email: str, db: AsyncSession, background_tasks: BackgroundTasks
+    ):
         try:
             result = await db.execute(select(User).filter(User.email == email))
             user = result.scalar_one_or_none()
@@ -448,6 +452,10 @@ class AuthService:
             await db.refresh(reset_entry)
             # 4️⃣ You can send email here (for now, just return the token)
             # In production, send via SendGrid, SMTP, or AWS SES
+            link: str = (
+                "http://localhost:8000/api/v1/reset-passoword?token={reset_token}"
+            )
+            background_tasks.add_task(self.mail_service.SEND_RESET_TOKEN, email, link)
             reset_link = (
                 f"https://your-frontend-domain.com/reset-password?token={reset_token}"
             )
