@@ -4,6 +4,7 @@ from typing import Optional
 
 from fastapi import (
     APIRouter,
+    BackgroundTasks,
     Body,
     Cookie,
     Depends,
@@ -30,7 +31,7 @@ from app.schemas.user_schemas import (
     ResetPasswordRequest,
     UserCreate,
 )
-from app.services.auth_service import AuthService
+from app.services.auth_management.auth_service import AuthService
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 auth = AuthService()
@@ -97,10 +98,19 @@ async def admin_logout(
     description="Initiate admin password reset by sending OTP/link",
 )
 async def admin_forgot_password(
-    data: ForgotPasswordRequest, db: AsyncSession = Depends(get_postgres)
+    data: ForgotPasswordRequest,
+    db: AsyncSession = Depends(get_postgres),
+    background_tasks=BackgroundTasks(),
 ):
-    result = await auth.FORGOT_PASSWORD(email=data.email, db=db)
+    result = await auth.FORGOT_PASSWORD(
+        email=data.email, db=db, background_tasks=background_tasks
+    )
     return result
+
+
+@router.post("/admin-change-password", description="request for changing the password")
+async def admin_change_password():
+    pass
 
 
 @router.post("/reset-password", description="Reset password using a valid reset token")

@@ -627,51 +627,6 @@ async def soft_delete_batch(
 # Family Members Routes
 
 
-@router.post("/family-members/", description="Add a family member to a user")
-async def add_family_member(
-    current_user=Security(get_current_user, scopes=["admin:write"]),
-    db: AsyncSession = Depends(get_postgres),
-    family_member_data: dict = Body(...),
-):
-    """Add family member"""
-    pass
-
-
-@router.get(
-    "/family-members/{user_id}", description="List all family members of a user"
-)
-async def get_family_members(
-    user_id: int = Path(...),
-    current_user=Security(get_current_user, scopes=["admin:read"]),
-    db: AsyncSession = Depends(get_postgres),
-):
-    """Get all family members of a user"""
-    pass
-
-
-@router.put("/family-members/{member_id}", description="Update a family member by ID")
-async def update_family_member(
-    member_id: int = Path(...),
-    current_user=Security(get_current_user, scopes=["admin:write"]),
-    db: AsyncSession = Depends(get_postgres),
-    family_member_data: dict = Body(...),
-):
-    """Update family member"""
-    pass
-
-
-@router.delete(
-    "/family-members/{member_id}", description="Delete a family member by ID"
-)
-async def delete_family_member(
-    member_id: int = Path(...),
-    current_user=Security(get_current_user, scopes=["admin:write"]),
-    db: AsyncSession = Depends(get_postgres),
-):
-    """Delete family member"""
-    pass
-
-
 router.include_router(medicine_router)
 router.include_router(category_router)
 router.include_router(tags_router)
