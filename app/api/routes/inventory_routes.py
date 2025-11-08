@@ -624,8 +624,6 @@ async def soft_delete_batch(
     return result
 
 
-# Family Members Routes
-
 
 router.include_router(medicine_router)
 router.include_router(category_router)

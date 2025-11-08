@@ -3,21 +3,27 @@ import io
 import json
 import os
 import stat
-from datetime import datetime
+from datetime import datetime, timedelta
 from operator import or_
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
-from fastapi import File, HTTPException, UploadFile
+from fastapi import BackgroundTasks, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 from motor.motor_asyncio import AsyncIOMotorGridFSBucket
+from openpyxl import Workbook
 from pandas.core.api import notna
 from pydantic_settings.sources.providers.aws import import_aws_secrets_manager
 from sqlalchemy import and_, asc, desc, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, joinedload, selectinload
 
-from app.core.exceptions import BadRequestException, NotFoundException
+from app.core.database import async_session  # ✅ your async session factory
+from app.core.exceptions import (
+    BadRequestException,
+    InternalServerErrorException,
+    NotFoundException,
+)
 from app.models.inventory_management_models import (
     Alternative,
     Category,
@@ -32,6 +38,7 @@ from app.models.inventory_management_models import (
     SideEffect,
     Tag,
 )
+from app.models.order_management_models import OrderItem, RequestOrderItem
 from app.models.user_management_models import FileAsset
 from app.schemas.inventory_schemas import (
     AlternativeCreate,
@@ -44,7 +51,7 @@ from app.schemas.inventory_schemas import (
     SideEffectCreate,
     SideEffectResponse,
     TagCreate,
-    TagReponse,
+    TagResponse,
 )
 from app.services.cache_service import CacheService
 from app.services.file_service import FileService
@@ -57,6 +64,109 @@ class InventoryManagementService:
         self.MAX_FILE_SIZE_MB = 10
         self.cache_service = CacheService()
         self.BASE_FILE_URL = "http://localhost:8000/api/file_routes/assets/"
+
+    async def _attempt_reallocation_for_medicine(self, medicine_id: int):
+        """
+        Try to fulfill existing backorders for a given medicine when new stock arrives.
+        Automatically reallocates available stock to backordered items.
+        Runs in background (fresh DB session).
+        """
+        async with async_session() as db:  # ✅ create fresh session for background task
+            try:
+                print(
+                    f"[Reallocation] Starting reallocation for medicine_id={medicine_id}"
+                )
+                # 1️⃣ Fetch all backordered order items for this medicine
+                q = (
+                    select(OrderItem)
+                    .join(
+                        RequestOrderItem,
+                        RequestOrderItem.request_order_item_id
+                        == OrderItem.request_order_item_id,
+                    )
+                    .filter(
+                        OrderItem.is_backordered == True,
+                        OrderItem.is_deleted == False,
+                        RequestOrderItem.medicine_id == medicine_id,
+                    )
+                    .order_by(OrderItem.order_item_id.asc())  # oldest backorders first
+                )
+                res = await db.execute(q)
+                backorders: List[OrderItem] = res.scalars().all()
+                if not backorders:
+                    print(
+                        f"[Reallocation] No backorders found for medicine_id={medicine_id}"
+                    )
+                    return
+                # 2️⃣ Get all available batches (including new one)
+                batch_q = (
+                    select(MedicineBatch)
+                    .filter(
+                        MedicineBatch.medicine_id == medicine_id,
+                        MedicineBatch.is_deleted == False,
+                        (
+                            MedicineBatch.quantity
+                            - func.coalesce(MedicineBatch.reserved_quantity, 0)
+                        )
+                        > 0,
+                    )
+                    .order_by(MedicineBatch.expiry_date.asc())
+                    .with_for_update()
+                )
+                batches_res = await db.execute(batch_q)
+                batches: List[MedicineBatch] = batches_res.scalars().all()
+                if not batches:
+                    print(
+                        f"[Reallocation] No available batches for medicine_id={medicine_id}"
+                    )
+                    return
+                # 3️⃣ Try allocating each backorder
+                reallocated_count = 0
+                for backorder in backorders:
+                    needed = int(backorder.backordered_qty)
+                    if needed <= 0:
+                        continue
+                    for batch in batches:
+                        available = int(batch.quantity) - int(
+                            batch.reserved_quantity or 0
+                        )
+                        if available <= 0:
+                            continue
+                        take = min(needed, available)
+                        batch.reserved_quantity += take
+                        # Convert this backorder into a reserved one
+                        backorder.batch_id = batch.batch_id
+                        backorder.quantity = take
+                        backorder.is_backordered = False
+                        backorder.backordered_qty = max(0, needed - take)
+                        print(
+                            f"[Reallocation] OrderItem {backorder.order_item_id} "
+                            f"allocated {take} units from batch {batch.batch_id}"
+                        )
+                        needed -= take
+                        reallocated_count += take
+
+                        if needed <= 0:
+                            break
+                    # If partially fulfilled, keep remaining as backorder
+                    if needed > 0:
+                        backorder.backordered_qty = needed
+                        backorder.is_backordered = True
+                        print(
+                            f"[Reallocation] OrderItem {backorder.order_item_id} "
+                            f"partially fulfilled, {needed} still backordered"
+                        )
+                await db.commit()
+                print(
+                    f"[Reallocation] Completed reallocation for medicine_id={medicine_id}, "
+                    f"total reallocated={reallocated_count}"
+                )
+            except Exception as e:
+                print(f"[Reallocation Error] medicine_id={medicine_id}, error={e}")
+                await db.rollback()
+                raise InternalServerErrorException(
+                    "internal server error : [attempt_reallocation_for_medicine]"
+                )
 
     async def UPLOAD_MEDICINE_IMAGE(
         self,
@@ -532,6 +642,79 @@ class InventoryManagementService:
             "updated_at": str(medicine.updated_at),
         }
 
+    async def GET_CUSTOMER_MEDICINE_DETAILS(self, db: AsyncSession, medicine_id: int):
+        """
+        Fetch medicine details without heavy joins (batches, gst_slabs).
+        Includes categories, tags, side effects, alternatives, and images.
+        """
+        try:
+            cache_key = f"medicine_details_semi:{medicine_id}"
+            cached_data = await self.cache_service.get_cache(cache_key)
+            if cached_data:
+                print(f"[Cache] Hit for light medicine details {medicine_id}")
+                return cached_data
+            query = (
+                select(Medicine)
+                .options(
+                    joinedload(Medicine.images).joinedload(MedicineImage.file_asset),
+                    joinedload(Medicine.categories),
+                    joinedload(Medicine.tags),
+                    joinedload(Medicine.side_effects),
+                    joinedload(Medicine.alternatives),
+                )
+                .where(
+                    Medicine.medicine_id == medicine_id,
+                    Medicine.is_deleted == False,
+                )
+            )
+            result = await db.execute(query)
+            medicine = result.scalar_one_or_none()
+            if not medicine:
+                raise HTTPException(status_code=404, detail="Medicine not found")
+            response = self._serialize_medicine_semi(medicine)
+            await self.cache_service.set_cache(cache_key, response)
+            return response
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"[GET_MEDICINE_DETAILS_LIGHT ERROR]: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail="Internal server error: [get_medicine_details_light]",
+            )
+
+    def _serialize_medicine_semi(self, medicine: Medicine) -> dict:
+        """
+        Serialize a Medicine object without batches and gst_slab.
+        """
+        return {
+            "medicine_id": medicine.medicine_id,
+            "medicine_name": medicine.medicine_name,
+            "generic_name": medicine.generic_name,
+            "manufacturer": medicine.manufacturer,
+            "description": medicine.description,
+            "is_prescribed": medicine.is_prescribed,
+            "weight": float(medicine.weight),
+            "hsn_code": medicine.hsn_code,
+            "image_urls": [
+                img.file_asset.file_url
+                for img in (medicine.images or [])
+                if getattr(img, "file_asset", None)
+            ],
+            "categories": [
+                {"id": c.category_id, "name": c.category_name}
+                for c in (medicine.categories or [])
+            ],
+            "tags": [{"id": t.tag_id, "name": t.name} for t in (medicine.tags or [])],
+            "side_effects": [
+                {"id": s.side_effect_id, "name": s.side_effect}
+                for s in (medicine.side_effects or [])
+            ],
+            "alternatives": [
+                {"id": a.alternative_id} for a in (medicine.alternatives or [])
+            ],
+        }
+
     async def GET_LIGHT_MEDICINES(
         self, db: AsyncSession, skip: int = 0, limit: int = 20
     ):
@@ -909,7 +1092,10 @@ class InventoryManagementService:
             )
 
     async def CREATE_MEDICINE_BATCH(
-        self, db: AsyncSession, batch_data: MedicineBatchCreate
+        self,
+        db: AsyncSession,
+        batch_data: MedicineBatchCreate,
+        background_tasks: BackgroundTasks,
     ):
         try:
             medicine_id = batch_data.medicine_id
@@ -928,8 +1114,12 @@ class InventoryManagementService:
                 selling_price=batch_data.selling_price,
             )
             db.add(new_batch)
+            await db.flush()
             await db.commit()
             await db.refresh(new_batch)
+            background_tasks.add_task(
+                self._attempt_reallocation_for_medicine, medicine_id
+            )
             return new_batch
         except HTTPException:
             raise
@@ -1014,6 +1204,237 @@ class InventoryManagementService:
             raise HTTPException(
                 status_code=500, detail="internal server error: [soft_delete_batch]"
             )
+
+    async def GET_LOW_STOCK_ITEMS(
+        self, db: AsyncSession, threshold: int, skip: int, limit: int
+    ):
+        """
+        Get medicine batches where available stock (quantity - reserved_quantity)
+        is less than or equal to the given threshold.
+        """
+        try:
+            print(f"[Inventory] Fetching low-stock batches (threshold={threshold})")
+            q = (
+                select(MedicineBatch)
+                .filter(
+                    MedicineBatch.is_deleted == False,
+                    (
+                        MedicineBatch.quantity
+                        - func.coalesce(MedicineBatch.reserved_quantity, 0)
+                    )
+                    <= threshold,
+                )
+                .order_by(MedicineBatch.expiry_date.asc())
+                .offset(skip)
+                .limit(limit)
+            )
+            res = await db.execute(q)
+            batches = res.scalars().all()
+            print(f"[Inventory] Found {len(batches)} low-stock batches")
+            return batches
+        except Exception as e:
+            print(f"[Inventory Error] GET_LOW_STOCK_ITEMS failed: {e}")
+            await db.rollback()
+            raise InternalServerErrorException(
+                "internal server error : [GET_LOW_STOCK_ITEMS]"
+            )
+
+    # ----------------------------------------------------------------------
+    async def GET_EXPIRED_BATCHES(self, db: AsyncSession, skip: int, limit: int):
+        """
+        Get expired medicine batches (expiry_date < today).
+        """
+        try:
+            today = datetime.now().date()
+            print(f"[Inventory] Fetching expired batches before {today}")
+            q = (
+                select(MedicineBatch)
+                .filter(
+                    MedicineBatch.is_deleted == False,
+                    MedicineBatch.expiry_date < today,
+                )
+                .order_by(MedicineBatch.expiry_date.asc())
+                .offset(skip)
+                .limit(limit)
+            )
+            res = await db.execute(q)
+            batches = res.scalars().all()
+            print(f"[Inventory] Found {len(batches)} expired batches")
+            return batches
+        except Exception as e:
+            print(f"[Inventory Error] GET_EXPIRED_BATCHES failed: {e}")
+            await db.rollback()
+            raise InternalServerErrorException(
+                "internal server error : [GET_EXPIRED_BATCHES]"
+            )
+
+    # ----------------------------------------------------------------------
+    async def GET_EXPIRING_SOON(
+        self, db: AsyncSession, days: int, skip: int, limit: int
+    ):
+        """
+        Get medicine batches expiring within the next N days.
+        """
+        try:
+            cutoff = datetime.now().date() + timedelta(days=days)
+            print(f"[Inventory] Fetching batches expiring before {cutoff}")
+            q = (
+                select(MedicineBatch)
+                .filter(
+                    MedicineBatch.is_deleted == False,
+                    MedicineBatch.expiry_date <= cutoff,
+                )
+                .order_by(MedicineBatch.expiry_date.asc())
+                .offset(skip)
+                .limit(limit)
+            )
+            res = await db.execute(q)
+            batches = res.scalars().all()
+            print(
+                f"[Inventory] Found {len(batches)} batches expiring within {days} days"
+            )
+            return batches
+        except Exception as e:
+            print(f"[Inventory Error] GET_EXPIRING_SOON failed: {e}")
+            await db.rollback()
+            raise InternalServerErrorException(
+                "internal server error : [GET_EXPIRING_SOON]"
+            )
+
+    # ----------------------------------------------------------------------
+    async def GET_STOCK_SUMMARY(self, db: AsyncSession, skip: int, limit: int):
+        """
+        Get total available stock per medicine (quantity - reserved_quantity),
+        aggregated across all batches.
+        """
+        try:
+            print("[Inventory] Fetching stock summary (paginated)")
+
+            q = (
+                select(
+                    Medicine.medicine_id,
+                    Medicine.medicine_name,
+                    func.sum(
+                        MedicineBatch.quantity
+                        - func.coalesce(MedicineBatch.reserved_quantity, 0)
+                    ).label("available_stock"),
+                )
+                .join(MedicineBatch, Medicine.medicine_id == MedicineBatch.medicine_id)
+                .filter(MedicineBatch.is_deleted == False)
+                .group_by(Medicine.medicine_id, Medicine.medicine_name)
+                .order_by(Medicine.medicine_name.asc())
+                .offset(skip)
+                .limit(limit)
+            )
+
+            res = await db.execute(q)
+            summary = res.mappings().all()
+
+            print(f"[Inventory] Retrieved {len(summary)} stock summary records")
+            return summary
+
+        except Exception as e:
+            print(f"[Inventory Error] GET_STOCK_SUMMARY failed: {e}")
+            await db.rollback()
+            raise InternalServerErrorException(
+                "internal server error : [GET_STOCK_SUMMARY]"
+            )
+
+    async def DOWNLOAD_CATEGORY_TEMPLATE(self):
+        try:
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Category Template"
+            headers = ["category_name"]
+            example_row = ["Pain Relief"]
+            ws.append(headers)
+            ws.append(example_row)
+            output = io.BytesIO()
+            wb.save(output)
+            output.seek(0)
+            return StreamingResponse(
+                output,
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={
+                    "Content-Disposition": "attachment; filename=category_template.xlsx"
+                },
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            print("===================================")
+            print(f"[DOWNLOAD_TEMPLATE - Category] Error: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail="internal server error : [DOWNLOAD_TEMPLATE - Category]",
+            )
+
+    async def BULK_UPLOAD_CATEGORIES(self, db: AsyncSession, file: UploadFile):
+        try:
+            ext = os.path.splitext(file.filename)[1].lower()
+            if ext not in self.ALLOWED_EXTENSIONS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unsupported file type. Allowed: {', '.join(self.ALLOWED_EXTENSIONS)}",
+                )
+            file_content = await file.read()
+            file_size_mb = len(file_content) / (1024 * 1024)
+            if file_size_mb > self.MAX_FILE_SIZE_MB:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"File too large. Max allowed size is {self.MAX_FILE_SIZE_MB} MB.",
+                )
+            try:
+                if ext == ".csv":
+                    df = pd.read_csv(io.BytesIO(file_content))
+                else:
+                    df = pd.read_excel(io.BytesIO(file_content))
+            except Exception as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Failed to parse the file: {str(e)}",
+                )
+            required_columns = ["category_name"]
+            missing_cols = [col for col in required_columns if col not in df.columns]
+            if missing_cols:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Missing required column(s): {', '.join(missing_cols)}",
+                )
+            inserted, errors = [], []
+            for index, row in df.iterrows():
+                try:
+                    category_name = str(row["category_name"]).strip()
+                    if not category_name or pd.isna(category_name):
+                        continue
+                    existing = await db.execute(
+                        select(Category).filter(Category.category_name == category_name)
+                    )
+                    if existing.scalar_one_or_none():
+                        errors.append(
+                            {
+                                "row": index + 1,
+                                "error": f"Category '{category_name}' already exists",
+                            }
+                        )
+                        continue
+                    new_category = Category(category_name=category_name)
+                    db.add(new_category)
+                    inserted.append(category_name)
+                except Exception as e:
+                    errors.append({"row": index + 1, "error": str(e)})
+            await db.commit()
+            return {
+                "message": f"{len(inserted)} categories uploaded successfully",
+                "inserted": inserted,
+                "errors": errors,
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            print("-------------------------------------------")
+            print(f"[BULK_UPLOAD_CATEGORIES] : {e}")
+            raise HTTPException(status_code=500, detail="Internal server error")
 
     async def CREATE_CATEGORY(self, db: AsyncSession, category_data: CategoryCreate):
         try:
@@ -1525,3 +1946,317 @@ class InventoryManagementService:
             raise HTTPException(
                 status_code=500, detail="Internal server error: [SOFT_DELETE_GST_SLAB]"
             )
+
+    async def DOWNLOAD_TAG_TEMPLATE(self):
+        try:
+            headers = ["name"]
+            example_row = ["Antibiotic"]
+            output = io.StringIO()
+            writer = csv.writer(output)
+            writer.writerow(headers)
+            writer.writerow(example_row)
+            output.seek(0)
+            return StreamingResponse(
+                iter([output.getvalue()]),
+                media_type="text/csv",
+                headers={
+                    "Content-Disposition": "attachment; filename=tag_template.csv"
+                },
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            print("===================================")
+            print(f"[DOWNLOAD_TAG_TEMPLATE] Error: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail="internal server error : [DOWNLOAD_TAG_TEMPLATE]",
+            )
+
+    async def BULK_UPLOAD_TAGS(self, db: AsyncSession, file: UploadFile):
+        try:
+            ext = os.path.splitext(file.filename)[1].lower()
+            if ext not in self.ALLOWED_EXTENSIONS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unsupported file type. Allowed: {', '.join(self.ALLOWED_EXTENSIONS)}",
+                )
+            file_content = await file.read()
+            file_size_mb = len(file_content) / (1024 * 1024)
+            if file_size_mb > self.MAX_FILE_SIZE_MB:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"File too large. Max allowed size is {self.MAX_FILE_SIZE_MB} MB.",
+                )
+            try:
+                if ext == ".csv":
+                    df = pd.read_csv(io.BytesIO(file_content))
+                else:
+                    df = pd.read_excel(io.BytesIO(file_content))
+            except Exception as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Failed to parse the file: {str(e)}",
+                )
+            required_columns = ["name"]
+            missing_cols = [col for col in required_columns if col not in df.columns]
+            if missing_cols:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Missing required column(s): {', '.join(missing_cols)}",
+                )
+            inserted, errors = [], []
+            for index, row in df.iterrows():
+                try:
+                    tag_name = str(row["name"]).strip()
+                    if not tag_name or pd.isna(tag_name):
+                        continue
+                    existing = await db.execute(
+                        select(Tag).filter(Tag.name == tag_name)
+                    )
+                    if existing.scalar_one_or_none():
+                        errors.append(
+                            {
+                                "row": index + 1,
+                                "error": f"Tag '{tag_name}' already exists",
+                            }
+                        )
+                        continue
+                    new_tag = Tag(name=tag_name)
+                    db.add(new_tag)
+                    inserted.append(tag_name)
+                except Exception as e:
+                    errors.append({"row": index + 1, "error": str(e)})
+            await db.commit()
+            return {
+                "message": f"{len(inserted)} tags uploaded successfully",
+                "inserted": inserted,
+                "errors": errors,
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            print("-------------------------------------------")
+            print(f"[BULK_UPLOAD_TAGS] : {e}")
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+    async def DOWNLOAD_SIDE_EFFECT_TEMPLATE(self):
+        try:
+            headers = ["side_effect"]
+            example_row = ["Nausea"]
+            output = io.StringIO()
+            writer = csv.writer(output)
+            writer.writerow(headers)
+            writer.writerow(example_row)
+            output.seek(0)
+            return StreamingResponse(
+                iter([output.getvalue()]),
+                media_type="text/csv",
+                headers={
+                    "Content-Disposition": "attachment; filename=side_effect_template.csv"
+                },
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            print("===================================")
+            print(f"[DOWNLOAD_SIDE_EFFECT_TEMPLATE] Error: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail="internal server error : [DOWNLOAD_SIDE_EFFECT_TEMPLATE]",
+            )
+
+    async def BULK_UPLOAD_SIDE_EFFECTS(self, db: AsyncSession, file: UploadFile):
+        try:
+            ext = os.path.splitext(file.filename)[1].lower()
+            if ext not in self.ALLOWED_EXTENSIONS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unsupported file type. Allowed: {', '.join(self.ALLOWED_EXTENSIONS)}",
+                )
+            file_content = await file.read()
+            file_size_mb = len(file_content) / (1024 * 1024)
+            if file_size_mb > self.MAX_FILE_SIZE_MB:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"File too large. Max allowed size is {self.MAX_FILE_SIZE_MB} MB.",
+                )
+            try:
+                if ext == ".csv":
+                    df = pd.read_csv(io.BytesIO(file_content))
+                else:
+                    df = pd.read_excel(io.BytesIO(file_content))
+            except Exception as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Failed to parse the file: {str(e)}",
+                )
+            required_columns = ["side_effect"]
+            missing_cols = [col for col in required_columns if col not in df.columns]
+            if missing_cols:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Missing required column(s): {', '.join(missing_cols)}",
+                )
+            inserted, errors = [], []
+            for index, row in df.iterrows():
+                try:
+                    side_effect_name = str(row["side_effect"]).strip()
+                    if not side_effect_name or pd.isna(side_effect_name):
+                        continue
+                    existing = await db.execute(
+                        select(SideEffect).filter(
+                            SideEffect.side_effect == side_effect_name
+                        )
+                    )
+                    if existing.scalar_one_or_none():
+                        errors.append(
+                            {
+                                "row": index + 1,
+                                "error": f"Side effect '{side_effect_name}' already exists",
+                            }
+                        )
+                        continue
+                    new_side_effect = SideEffect(side_effect=side_effect_name)
+                    db.add(new_side_effect)
+                    inserted.append(side_effect_name)
+                except Exception as e:
+                    errors.append({"row": index + 1, "error": str(e)})
+            await db.commit()
+            return {
+                "message": f"{len(inserted)} side effects uploaded successfully",
+                "inserted": inserted,
+                "errors": errors,
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            print("-------------------------------------------")
+            print(f"[BULK_UPLOAD_SIDE_EFFECTS] : {e}")
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+    async def DOWNLOAD_GST_SLAB_TEMPLATE(self):
+        try:
+            headers = ["hsn_code", "description", "gst_rate", "effective_from"]
+            example_row = [
+                "30049099",
+                "Medicinal products",
+                "12.00",
+                "2024-01-01",
+            ]
+            output = io.StringIO()
+            writer = csv.writer(output)
+            writer.writerow(headers)
+            writer.writerow(example_row)
+            output.seek(0)
+            return StreamingResponse(
+                iter([output.getvalue()]),
+                media_type="text/csv",
+                headers={
+                    "Content-Disposition": "attachment; filename=gst_slab_template.csv"
+                },
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            print("===================================")
+            print(f"[DOWNLOAD_GST_SLAB_TEMPLATE] Error: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail="internal server error : [DOWNLOAD_GST_SLAB_TEMPLATE]",
+            )
+
+    async def BULK_UPLOAD_GST_SLABS(self, db: AsyncSession, file: UploadFile):
+        try:
+            ext = os.path.splitext(file.filename)[1].lower()
+            if ext not in self.ALLOWED_EXTENSIONS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unsupported file type. Allowed: {', '.join(self.ALLOWED_EXTENSIONS)}",
+                )
+            file_content = await file.read()
+            file_size_mb = len(file_content) / (1024 * 1024)
+            if file_size_mb > self.MAX_FILE_SIZE_MB:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"File too large. Max allowed size is {self.MAX_FILE_SIZE_MB} MB.",
+                )
+            try:
+                if ext == ".csv":
+                    df = pd.read_csv(io.BytesIO(file_content))
+                else:
+                    df = pd.read_excel(io.BytesIO(file_content))
+            except Exception as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Failed to parse the file: {str(e)}",
+                )
+            required_columns = ["hsn_code", "description", "gst_rate", "effective_from"]
+            missing_cols = [col for col in required_columns if col not in df.columns]
+            if missing_cols:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Missing required column(s): {', '.join(missing_cols)}",
+                )
+            inserted, errors = [], []
+            for index, row in df.iterrows():
+                try:
+                    hsn_code = str(row["hsn_code"]).strip()
+                    description = (
+                        str(row["description"]).strip()
+                        if pd.notna(row.get("description"))
+                        else ""
+                    )
+                    gst_rate = (
+                        float(row["gst_rate"]) if pd.notna(row.get("gst_rate")) else 0.0
+                    )
+                    effective_from_str = str(row["effective_from"]).strip()
+                    if not hsn_code or pd.isna(hsn_code):
+                        errors.append(
+                            {"row": index + 1, "error": "HSN code is required"}
+                        )
+                        continue
+                    # Parse date
+                    try:
+                        effective_from = pd.to_datetime(effective_from_str).date()
+                    except:
+                        errors.append(
+                            {
+                                "row": index + 1,
+                                "error": f"Invalid date format: {effective_from_str}",
+                            }
+                        )
+                        continue
+                    existing = await db.execute(
+                        select(GSTSlab).filter(GSTSlab.hsn_code == hsn_code)
+                    )
+                    if existing.scalar_one_or_none():
+                        errors.append(
+                            {
+                                "row": index + 1,
+                                "error": f"GST slab with HSN code '{hsn_code}' already exists",
+                            }
+                        )
+                        continue
+                    new_gst_slab = GSTSlab(
+                        hsn_code=hsn_code,
+                        description=description,
+                        gst_rate=gst_rate,
+                        effective_from=effective_from,
+                    )
+                    db.add(new_gst_slab)
+                    inserted.append(hsn_code)
+                except Exception as e:
+                    errors.append({"row": index + 1, "error": str(e)})
+            await db.commit()
+            return {
+                "message": f"{len(inserted)} GST slabs uploaded successfully",
+                "inserted": inserted,
+                "errors": errors,
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            print("-------------------------------------------")
+            print(f"[BULK_UPLOAD_GST_SLABS] : {e}")
+            raise HTTPException(status_code=500, detail="Internal server error")
