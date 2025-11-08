@@ -19,7 +19,6 @@ from app.api.routes import (
     cart_routes,
     discount_routes,
     file_routes,
-    inventory_routes,
     issues_routes,
     notification_routes,
     order_routes,
@@ -31,6 +30,7 @@ from app.api.routes import (
     review_routes,
     role_routes,
 )
+from app.api.routes.inventory import router as inventory_router
 from app.core.config import allowed_origins, settings
 from app.core.database import Base, close_redis, engine, init_redis
 from app.middlewares.logging_middleware import LoggingMiddleware
@@ -300,7 +300,7 @@ app.include_router(router=auth_routes.router)
 app.include_router(router=profile_routes.router)
 app.include_router(router=role_routes.router)
 app.include_router(router=file_routes.router)
-app.include_router(router=inventory_routes.router)
+app.include_router(router=inventory_router)
 app.include_router(router=cart_routes.router)
 app.include_router(router=prescriptions.router)
 app.include_router(router=request_orders.router)
