@@ -1,0 +1,229 @@
+
+<!DOCTYPE html>
+    <html>
+    <head>
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">
+        <link rel="shortcut icon" href="https://fastapi.tiangolo.com/img/favicon.png">
+        <title>Custom API Docs</title>
+        <style>
+            body {
+                background: #f8fafc;
+            }
+
+            /* 🌟 Toolbar container */
+            .custom-toolbar {
+                display: flex;
+                align-items: center;
+                justify-content: flex-end;
+                gap: 12px;
+                background: #ffffff;
+                border: 1px solid #e5e7eb;
+                border-radius: 8px;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.06);
+                padding: 10px 14px;
+                margin-bottom: 16px;
+                position: sticky;
+                top: 10px;
+                z-index: 9999;
+            }
+
+            .custom-toolbar select,
+            .custom-toolbar input {
+                padding: 9px 12px;
+                font-size: 14px;
+                border: 1px solid #d1d5db;
+                border-radius: 6px;
+                background-color: #f9fafb;
+                outline: none;
+                transition: all 0.2s ease;
+            }
+
+            .custom-toolbar select:hover,
+            .custom-toolbar input:hover {
+                background-color: #fff;
+                border-color: #3b82f6;
+            }
+
+            .custom-toolbar select:focus,
+            .custom-toolbar input:focus {
+                border-color: #3b82f6;
+                box-shadow: 0 0 0 2px rgba(59,130,246,0.3);
+                background-color: #fff;
+            }
+
+            /* 🔍 Search field */
+            .custom-toolbar input {
+                width: 280px;
+                background-image: url('data:image/svg+xml;utf8,<svg fill="%23999" height="18" viewBox="0 0 24 24" width="18" xmlns="http://www.w3.org/2000/svg"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l4.25 4.25c.41.41 1.08.41 1.49 0s.41-1.08 0-1.49L15.5 14zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>');
+                background-repeat: no-repeat;
+                background-position: 10px center;
+                text-indent: 30px;
+            }
+
+            /* 🏷️ Dropdown style */
+            .custom-toolbar select {
+                width: 250px;
+                appearance: none;
+                background: linear-gradient(to right, #ffffff, #f8fafc);
+                background-image: url('data:image/svg+xml;utf8,<svg fill="%233b82f6" height="20" viewBox="0 0 24 24" width="20" xmlns="http://www.w3.org/2000/svg"><path d="M7 10l5 5 5-5z"/></svg>');
+                background-repeat: no-repeat;
+                background-position: right 12px center;
+                background-size: 16px;
+                padding-right: 36px;
+                font-weight: 500;
+                color: #333;
+            }
+
+            /* ✨ Highlight matched text */
+            mark.endpoint-highlight {
+                background-color: #fff3cd;
+                padding: 0 2px;
+                border-radius: 3px;
+            }
+
+            /* 🧭 Scrollbar styling */
+            ::-webkit-scrollbar {
+                width: 8px;
+                height: 8px;
+            }
+            ::-webkit-scrollbar-thumb {
+                background: #bdbdbd;
+                border-radius: 10px;
+            }
+            ::-webkit-scrollbar-thumb:hover {
+                background: #9aa0a6;
+            }
+        </style>
+    </head>
+    <body>
+        <div id="swagger-ui"></div>
+        <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+        <script>
+        const ui = SwaggerUIBundle({
+            url: '/openapi.json',
+            dom_id: '#swagger-ui',
+            layout: 'BaseLayout',
+            deepLinking: true,
+            showExtensions: true,
+            showCommonExtensions: true,
+            presets: [
+                SwaggerUIBundle.presets.apis,
+                SwaggerUIBundle.SwaggerUIStandalonePreset
+            ],
+            onComplete: () => {
+
+                // Rename username/password dynamically
+                setInterval(() => {
+                    const modal = document.querySelector('.modal-ux');
+                    if (!modal) return;
+                    modal.querySelectorAll('*').forEach(el => {
+                        el.childNodes.forEach(node => {
+                            if (node.nodeType === 3) {
+                                const text = node.textContent.trim();
+                                if (text.includes('username')) node.textContent = text.replace(/username/gi, 'Email or Mobile');
+                                if (text.includes('password')) node.textContent = text.replace(/password/gi, 'OTP or Password');
+                            }
+                        });
+                    });
+                }, 1000);
+
+                // Add toolbar (dropdown + search)
+                setTimeout(() => {
+                    const authWrapper = document.querySelector('.auth-wrapper');
+                    if (!authWrapper) return;
+
+                    const toolbar = document.createElement('div');
+                    toolbar.className = 'custom-toolbar';
+
+                    // Search bar
+                    const search = document.createElement('input');
+                    search.type = 'text';
+                    search.placeholder = 'Search endpoints or modules...';
+
+                    // Dropdown (no background color, colored icons only)
+                    const dropdown = document.createElement('select');
+                    dropdown.innerHTML = `
+                        <option value="">-- Show All --</option>
+                        <option value="default">Root</option>
+                        <option value="Auth" style="color:#a855f7;">🟣 Auth</option>
+                        <option value="Profiles" style="color:#22c55e;">🟢 Profile</option>
+                        <option value="Roles" style="color:#22c55e;">🟢 Roles</option>
+                        <option value="Files Testing" style="color:#0ea5e9;">🔵 Files</option>
+                        <option value="Medicines" style="color:#0ea5e9;">🔵 Medicines</option>
+                        <option value="Categories" style="color:#0ea5e9;">🔵 Categories</option>
+                        <option value="Tags" style="color:#0ea5e9;">🔵 Tags</option>
+                        <option value="Medicine Alternatives" style="color:#0ea5e9;">🔵 Medicine Alternatives</option>
+                        <option value="Medicine Batches" style="color:#0ea5e9;">🔵 Medicine Batches</option>
+                        <option value="Medicine Sideffects" style="color:#0ea5e9;">🔵 Medicine Sideeffects</option>
+                        <option value="GST Slabs" style="color:#0ea5e9;">🔵 GST Slabs</option>
+                        <option value="Cart" style="color:#f59e0b;">🟡 Cart</option>
+                        <option value="Prescriptions" style="color:#f59e0b;">🟡 Prescriptions</option>
+                        <option value="Request Orders" style="color:#f59e0b;">🟡 Request Orders</option>
+                        <option value="Orders" style="color:#f59e0b;">🟡 Orders</option>
+                        <option value="Issues" style="color:#ef4444;">🔴 Issues</option>
+                        <option value="Payments" style="color:#ef4444;">🔴 Payments</option>
+                        <option value="Discounts" style="color:#ef4444;">🔴 Discounts</option>
+                        <option value="Medicine Requests" style="color:#ef4444;">🔴 Medicine Requests</option>
+                        <option value="Reviews" style="color:#f97316;">🟠 Reviews</option>
+                        <option value="Notifications" style="color:#3b82f6;">🔵 Notifications</option>
+                        <option value="Backup Management" style="color:#3b82f6;">🔵 Backup Management</option>
+                        <option value="Content Management" style="color:#6b7280;">⚫ Content Management</option>
+                        <option value="Dashboard" style="color:#6b7280;">⚫ Dashboard</option>
+                        <option value="Audit LOGS" style="color:#6b7280;">⚫ Logs</option>
+                    `;
+
+                    // Dropdown filter
+                    dropdown.onchange = function() {
+                        const tag = this.value.toLowerCase();
+                        document.querySelectorAll('.opblock-tag-section').forEach(sec => {
+                            const tagName = sec.querySelector('.opblock-tag').textContent.trim().toLowerCase();
+                            sec.style.display = (!tag || tagName.includes(tag)) ? '' : 'none';
+                        });
+                    };
+
+                    // Combined search with highlighting
+                    search.addEventListener('input', function() {
+                        const query = this.value.toLowerCase();
+                        document.querySelectorAll('.opblock-tag-section').forEach(sec => {
+                            const tagEl = sec.querySelector('.opblock-tag');
+                            const tagText = tagEl.textContent.toLowerCase();
+                            const endpoints = sec.querySelectorAll('.opblock-summary-path');
+                            let matchesEndpoint = false;
+
+                            // Reset highlights first
+                            tagEl.innerHTML = tagEl.textContent;
+                            endpoints.forEach(ep => ep.innerHTML = ep.textContent);
+
+                            // Tag highlight
+                            if (query && tagText.includes(query)) {
+                                const regex = new RegExp('(' + query + ')', 'gi');
+                                tagEl.innerHTML = tagEl.textContent.replace(regex, '<mark class="endpoint-highlight">$1</mark>');
+                            }
+
+                            // Endpoint search + highlight
+                            endpoints.forEach(ep => {
+                                const text = ep.textContent.toLowerCase();
+                                if (text.includes(query)) {
+                                    matchesEndpoint = true;
+                                    const regex = new RegExp('(' + query + ')', 'gi');
+                                    ep.innerHTML = ep.textContent.replace(regex, '<mark class="endpoint-highlight">$1</mark>');
+                                    ep.closest('.opblock').style.display = '';
+                                } else {
+                                    ep.closest('.opblock').style.display = 'none';
+                                }
+                            });
+
+                            // Hide tag sections that don’t match
+                            sec.style.display = (tagText.includes(query) || matchesEndpoint || query === '') ? '' : 'none';
+                        });
+                    });
+
+                    toolbar.appendChild(search);
+                    toolbar.appendChild(dropdown);
+                    authWrapper.parentNode.insertBefore(toolbar, authWrapper);
+                }, 1000);
+            }
+        });
+        </script>
+    </body>
+    </html>

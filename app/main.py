@@ -1,3 +1,5 @@
+import os
+
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
@@ -55,119 +57,10 @@ app = FastAPI(
 
 @app.get("/docs", include_in_schema=False)
 def custom_docs():
-    html = """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <link type="text/css" rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">
-        <link rel="shortcut icon" href="https://fastapi.tiangolo.com/img/favicon.png">
-        <title>Custom Docs with Tag Filter</title>
-    </head>
-    <body>
-        <div id="swagger-ui"></div>
-        <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
-        <script>
-        const ui = SwaggerUIBundle({
-            url: '/openapi.json',
-            dom_id: '#swagger-ui',
-            layout: 'BaseLayout',
-            deepLinking: true,
-            showExtensions: true,
-            showCommonExtensions: true,
-            presets: [
-                SwaggerUIBundle.presets.apis,
-                SwaggerUIBundle.SwaggerUIStandalonePreset
-            ],
-            onComplete: () => {
-                // Wait for DOM to be ready
-                const authButton = document.querySelector('.btn.authorize.unlocked');
-    // Wait a short time in case the modal content loads dynamically
-    setInterval(() => {
-      
-      const modal = document.querySelector('.modal-ux'); // or use your modal selector
-modal.querySelectorAll('*').forEach(el => {
-  el.childNodes.forEach(node => {
-    if (node.nodeType === 3) {
-      const text = node.textContent.trim();
-      if (text.includes('username')) {
-        node.textContent = text.replace(/username/gi, 'Mobile or Email ');
-      }
-      if (text.includes('password')) {
-        node.textContent = text.replace(/password/gi, 'OTP or Password');
-      }
-    }  
-  });
-});
-    }, 5000);
-                setTimeout(() => {
-                    const authWrapper = document.querySelector('.auth-wrapper');
-                    if (authWrapper) {
-                        const dropdown = document.createElement('select');
-                        dropdown.style.marginRight = '10px';
-                        dropdown.innerHTML = `
-                            <option value="">-- Show All --</option>
-                            <option value="default">Root</option>
-                            <option value="Auth">Auth</option>
-                            <option value="Profiles">Profile</option>
-                            <option value="Roles">Roles</option>
-                            <option value="Files Testing">Files</option>
-                            <option value="Medicines">Medicines</option>
-                            <option value="Categories">Categories</option>
-                            <option value="Tags">Tags</option>
-                            <option value="Medicine Alternatives">Medicine Alternatives</option>
-                            <option value="Medicine Batches">Medicine Batches</option>
-                            <option value="Medicine Sideffects">Medicine Sideeffects</option>
-                            <option value="GST Slabs">GST Slabs</option>
-                            <option value="Cart">Cart</option>
-                            <option value="Prescriptions">Prescriptions</option>
-                            <option value="Request Orders">Request Orders</option>
-                            <option value="Orders">Orders</option>
-                            <option value="Issues">Issues</option>
-                            <option value="Payments">Payments</option>
-                            <option value="Discounts">Discounts</option>
-                            <option value="Medicine Requests">Medicine Requests</option>
-                            <option value="Reviews">Reviews</option>
-                            <option value="Notifications">Notifications</option>
-                            <option value="Backup Management">Backup Management</option>
-                            <option value="Content Management">Content Management</option>
-                            <option value="Dashboard">Dashboard</option>
-                            <option value="Audit LOGS">Logs</option>
-
-                        `;
-
-                        
-                        dropdown.style.zIndex = '9999';
-                        dropdown.style.padding = '8px';
-                        dropdown.style.backgroundColor = '#f5f5f5';
-                        dropdown.style.border = '1px solid #ccc';
-                        dropdown.style.borderRadius = '4px';
-                        dropdown.style.cursor = 'pointer';
-                        dropdown.style.marginRight = '10px';
-
-
-                        dropdown.onchange = function() {
-                            const tag = this.value;
-                            document.querySelectorAll('.opblock-tag-section').forEach(sec => {
-                                const tagName = sec.querySelector('.opblock-tag').textContent.trim();
-                                if (!tag || tagName === tag) {
-                                    sec.style.display = '';
-                                } else {
-                                    sec.style.display = 'none';
-                                }
-                            });
-                        };
-
-                        // Insert dropdown before the auth button
-                        authWrapper.parentNode.insertBefore(dropdown, authWrapper);
-                    }
-                }, 1000); // Small delay to ensure Swagger UI renders
-            }
-        });
-        </script>
-    </body>
-    </html>
-    """
-    return HTMLResponse(content=html)
+    html_path = os.path.join(os.path.dirname(__file__), "static", "custom_swagger.html")
+    with open(html_path, "r", encoding="utf-8") as f:
+        html_content = f.read()
+    return HTMLResponse(content=html_content)
 
 
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1"])
