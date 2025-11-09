@@ -1,3 +1,5 @@
+from typing import Any, Dict, Optional
+
 from fastapi import HTTPException, status
 
 
@@ -51,4 +53,37 @@ class InternalServerErrorException(HTTPException):
                 "error": detail,
                 "status_code": status.HTTP_500_INTERNAL_SERVER_ERROR,
             },
+        )
+
+
+class AppException(HTTPException):
+    """
+    A generic, flexible exception class for application-level errors.
+    Can be used when none of the specific exceptions (NotFound, BadRequest, etc.)
+    apply, or when you need to include extra context in the error response.
+    """
+
+    def __init__(
+        self,
+        message: str = "An application error occurred",
+        status_code: int = status.HTTP_400_BAD_REQUEST,
+        error_code: Optional[str] = None,
+        details: Optional[Any] = None,
+        headers: Optional[Dict[str, str]] = None,
+    ):
+        error_payload = {
+            "error": message,
+            "status_code": status_code,
+        }
+
+        if error_code:
+            error_payload["error_code"] = error_code
+
+        if details:
+            error_payload["details"] = details
+
+        super().__init__(
+            status_code=status_code,
+            detail=error_payload,
+            headers=headers,
         )

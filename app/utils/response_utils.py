@@ -1,7 +1,51 @@
 # app/utils/response_utils.py
 from functools import wraps
-from fastapi import HTTPException
+from typing import Any, Optional
+
 from bson import ObjectId
+from fastapi import HTTPException
+from fastapi.responses import JSONResponse
+
+
+def success_response(
+    data: Optional[Any] = None,
+    message: str = "Success",
+    status_code: int = 200,
+) -> JSONResponse:
+    """
+    Standard success response wrapper for API routes.
+    Accepts any kind of data (dict, list, Pydantic model, etc.)
+    and returns a unified JSON structure.
+    """
+    if hasattr(data, "dict"):  # Handle Pydantic models
+        data = data.dict()
+
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "success": True,
+            "message": message,
+            "data": data,
+        },
+    )
+
+
+def error_response(
+    message: str = "An error occurred",
+    status_code: int = 400,
+    details: Optional[Any] = None,
+) -> JSONResponse:
+    """
+    Standard error response wrapper for API routes.
+    """
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "success": False,
+            "message": message,
+            "details": details,
+        },
+    )
 
 
 def serialize_mongo_doc(doc):
