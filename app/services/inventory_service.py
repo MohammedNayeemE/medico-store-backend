@@ -668,7 +668,7 @@ class InventoryManagementService:
                 )
             )
             result = await db.execute(query)
-            medicine = result.scalar_one_or_none()
+            medicine = result.unique().scalar_one_or_none()
             if not medicine:
                 raise HTTPException(status_code=404, detail="Medicine not found")
             response = self._serialize_medicine_semi(medicine)
@@ -677,6 +677,7 @@ class InventoryManagementService:
         except HTTPException:
             raise
         except Exception as e:
+            print("===================================")
             print(f"[GET_MEDICINE_DETAILS_LIGHT ERROR]: {e}")
             raise HTTPException(
                 status_code=500,

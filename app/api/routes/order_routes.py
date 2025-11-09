@@ -10,9 +10,9 @@ from app.models.enums import OrderStatusEnum
 from app.models.user_management_models import User
 from app.schemas.inventory_schemas import VerifyPrescription
 from app.schemas.order_schemas import OrderCreate, OrderItemCreate, OrderItemUpdate
-from app.services import invoice_service
-from app.services.invoice_service import InvoiceService
-from app.services.order_management_service import OrderService
+from app.services.order_management import invoice_service
+from app.services.order_management.invoice_service import InvoiceService
+from app.services.order_management.order_management_service import OrderService
 
 router = APIRouter(prefix="/orders", tags=["Orders"])
 order_manager = OrderService()

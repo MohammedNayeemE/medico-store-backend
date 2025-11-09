@@ -1,5 +1,7 @@
 import json
 from datetime import date, datetime
+from decimal import Decimal
+from enum import Enum
 from operator import or_
 from typing import Any, Dict, List, Optional
 
@@ -802,7 +804,8 @@ class OrderService:
                 )
             )
             prescription_obj = result.scalar_one_or_none()
-            prescription_obj.status = PrescriptionStatusEnum.verified.value
+            if prescription_obj:
+                prescription_obj.status = PrescriptionStatusEnum.verified.value
             await db.commit()
             await db.refresh(order)
             return {
@@ -828,7 +831,7 @@ class OrderService:
         db: AsyncSession,
         request_order_id: int,
         admin_id: int,
-        reason: str,
+        reason: RequestOrderApprove,
     ):
         try:
             result = await db.execute(
@@ -905,15 +908,26 @@ class OrderService:
                     status_code=400,
                     detail="Cannot convert an order with no items.",
                 )
-            total_amount = sum(
-                float(i.estimated_price or 0) for i in request_order.items
-            )
+
+            # Sum unit_price * quantity for each request item.
+            # I assume RequestOrderItem has fields: estimated_price (per-unit) and quantity.
+            total_amount_dec = Decimal("0.00")
+            for i in request_order.items:
+                unit = Decimal(str(i.estimated_price or 0))
+                qty = Decimal(str(getattr(i, "quantity", 1) or 1))
+                total_amount_dec += unit * qty
+
             new_order = Order(
                 customer_id=request_order.customer_id,
                 member_id=request_order.member_id,
                 prescription_id=request_order.prescription_id,
-                total_amount=total_amount,
-                status=OrderStatusEnum.pending,
+                # store numeric consistently (float or Decimal depending on your model)
+                total_amount=float(total_amount_dec.quantize(Decimal("0.01"))),
+                status=(
+                    OrderStatusEnum.pending.value
+                    if isinstance(OrderStatusEnum.pending, Enum)
+                    else OrderStatusEnum.pending
+                ),
                 request_order_id=request_order_id,
                 created_at=datetime.utcnow(),
             )
@@ -938,7 +952,9 @@ class OrderService:
     ):
         try:
             result = await db.execute(
-                select(RequestOrder).filter(
+                select(RequestOrder)
+                .options(selectinload(RequestOrder.items))
+                .filter(
                     RequestOrder.request_order_id == request_order_id,
                     RequestOrder.is_deleted == False,
                 )
@@ -946,11 +962,19 @@ class OrderService:
             order = result.scalar_one_or_none()
             if not order:
                 raise HTTPException(status_code=404, detail="Request order not found")
-            if order.status != RequestOrderStatusEnum.approved:
+            if order.status not in [
+                RequestOrderStatusEnum.approved.value,
+                RequestOrderStatusEnum.awaiting_payment.value,
+            ]:
                 raise HTTPException(
                     status_code=400,
                     detail=f"Cannot send payment notification for order in status: {order.status}",
                 )
+            # ✅ Compute total estimated price
+            total_estimated_price = sum(
+                float(item.estimated_price or 0) for item in order.items
+            )
+            # ✅ Update status to awaiting payment
             order.status = RequestOrderStatusEnum.awaiting_payment.value
             order.updated_at = datetime.utcnow()
             if hasattr(order, "verified_by"):
@@ -959,18 +983,23 @@ class OrderService:
                 order.verified_at = datetime.utcnow()
             await db.commit()
             await db.refresh(order)
-            result = await db.execute(
+            user_result = await db.execute(
                 select(User).filter(User.user_id == order.customer_id)
             )
-            user_email = result.scalar_one_or_none()
-            user_name = user_email.split("@")[0]
-            link = "dummyURL"
+            user = user_result.scalar_one_or_none()
+            if not user:
+                raise HTTPException(status_code=404, detail="Customer not found")
+            user_email = user.email
+            user_name = user_email.split("@")[0] if user_email else "Customer"
+            # ✅ Prepare payment link
+            link = f"http://localhost:8000/api/v1/payments/initiate?request_order_id={request_order_id}"
+            # ✅ Queue background email notification
             background_tasks.add_task(
                 self.mail_service.SEND_PAYMENT_NOTIFICATION_MAIL,
                 user_email,
                 user_name,
                 request_order_id,
-                order.estimated_price,
+                total_estimated_price,  # ✅ fixed
                 order.prescription_id,
                 link,
             )
@@ -980,7 +1009,9 @@ class OrderService:
                 "status": order.status,
                 "notified_by": admin_id,
                 "updated_at": order.updated_at,
+                "total_estimated_price": total_estimated_price,
             }
+
         except HTTPException:
             raise
         except Exception as e:

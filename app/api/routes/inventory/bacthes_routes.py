@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Body, Depends, Path, Query, Security
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, Path, Query, Security
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependecies.auth import get_current_user
@@ -13,11 +13,14 @@ inventory_manager = InventoryManagementService()
 
 @router.post("/", description="Create a medicine batch entry")
 async def create_batch(
+    background_tasks: BackgroundTasks,
     current_user=Security(get_current_user, scopes=["admin:write"]),
     db: AsyncSession = Depends(get_postgres),
     batch_data: MedicineBatchCreate = Body(...),
 ):
-    result = await inventory_manager.CREATE_MEDICINE_BATCH(db=db, batch_data=batch_data)
+    result = await inventory_manager.CREATE_MEDICINE_BATCH(
+        db=db, batch_data=batch_data, background_tasks=background_tasks
+    )
     return result
 
 

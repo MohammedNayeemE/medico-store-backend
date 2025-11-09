@@ -114,8 +114,10 @@ class RoleResponse(RoleCreate):
 
 
 class OtpRequest(BaseModel):
-    phone_number: constr(pattern=r"^[6-9]\d{9}$") = Field(
-        ..., example="9876543210", description="Phone number to send OTP"
+    phone_number: constr(pattern=r"^\+91[6-9]\d{9}$") = Field(
+        ...,
+        example="+919876543210",
+        description="Phone number with country code +91 (India)",
     )
 
 

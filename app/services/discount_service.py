@@ -17,7 +17,7 @@ from app.models.order_management_models import (
 from app.schemas.discount_schemas import (
     CouponCreate,
     DiscountCreate,
-    DiscountParamterCreate,
+    DiscountParameterCreate,
     DiscountTypeCreate,
     DiscountTypeUpdate,
     DiscountUpdate,
@@ -362,7 +362,10 @@ class DiscountService:
             )
 
     async def ADD_PARAMETER(
-        self, db: AsyncSession, discount_id: int, parameter_data: DiscountParamterCreate
+        self,
+        db: AsyncSession,
+        discount_id: int,
+        parameter_data: DiscountParameterCreate,
     ):
         try:
             new_param = DiscountParameter(
@@ -413,7 +416,7 @@ class DiscountService:
             )
 
     async def UPDATE_PARAMETER(
-        self, parameter_id: int, data: DiscountParamterCreate, db: AsyncSession
+        self, parameter_id: int, data: DiscountParameterCreate, db: AsyncSession
     ):
         try:
             result = await db.execute(

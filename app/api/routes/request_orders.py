@@ -1,6 +1,16 @@
 from typing import List, Optional
 
-from fastapi import APIRouter, Body, Depends, File, Path, Query, Security, UploadFile
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Body,
+    Depends,
+    File,
+    Path,
+    Query,
+    Security,
+    UploadFile,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependecies.auth import get_current_user
@@ -16,7 +26,7 @@ from app.schemas.request_order import (
     RequestOrderItemUpdate,
     RequestOrderReject,
 )
-from app.services.order_management_service import OrderService
+from app.services.order_management.order_management_service import OrderService
 
 router = APIRouter(prefix="/request-orders", tags=["Request Orders"])
 order_manager = OrderService()
@@ -28,7 +38,7 @@ order_manager = OrderService()
 async def create_request_order(
     request_data: RequestOrderCreate = Body(...),
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["admin:write"]),
+    current_user: User = Security(get_current_user, scopes=["customer:write"]),
 ):
     result = await order_manager.CREATE_REQUEST_ORDER(
         db=db, current_user=current_user, request_data=request_data
@@ -116,39 +126,32 @@ async def cancel_request_order(
 
 
 @router.post(
-    "/{request_order_id}/approve",
-    description="Approve a request order (admin only)",
+    "/{request_order_id}/change-status",
+    description="Approve or Reject the status of the request_order",
 )
-async def approve_request_order(
+async def change_status_of_request_order(
     request_order_id: int = Path(...),
-    approval_data: RequestOrderApprove = Body(...),
+    status: RequestOrderStatusEnum = Query(...),
     db: AsyncSession = Depends(get_postgres),
     current_user: User = Security(get_current_user, scopes=["admin:write"]),
+    reason: RequestOrderApprove = Body(...),
 ):
-    return await order_manager.APPROVE_REQUEST_ORDER(
-        db=db,
-        request_order_id=request_order_id,
-        admin_id=current_user.user_id,
-        data=approval_data,
-    )
-
-
-@router.post(
-    "/{request_order_id}/reject", description="Reject a request order (admin only)"
-)
-async def reject_request_order(
-    request_order_id: int = Path(...),
-    rejection_data: RequestOrderReject = Body(...),
-    db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["admin:write"]),
-):
-    result = await order_manager.REJECT_REQUEST_ORDER(
-        db=db,
-        request_order_id=request_order_id,
-        admin_id=current_user.user_id,
-        reason=rejection_data.reason,
-    )
-    return result
+    if status == RequestOrderStatusEnum.approved.value:
+        result = await order_manager.APPROVE_REQUEST_ORDER(
+            db=db,
+            request_order_id=request_order_id,
+            admin_id=current_user.user_id,
+            data=reason,
+        )
+        return result
+    else:
+        result = await order_manager.REJECT_REQUEST_ORDER(
+            db=db,
+            admin_id=current_user.user_id,
+            reason=reason,
+            request_order_id=request_order_id,
+        )
+        return result
 
 
 @router.post(
@@ -156,14 +159,18 @@ async def reject_request_order(
     description="Send payment notification to customer",
 )
 async def notify_payment(
+    background_tasks: BackgroundTasks,
     request_order_id: int = Path(...),
     db: AsyncSession = Depends(get_postgres),
     current_user: User = Security(get_current_user, scopes=["admin:write"]),
 ):
-    # return await order_manager.SEND_PAYMENT_NOTIFICATION(
-    #     db=db, request_order_id=request_order_id, admin_id=current_user.user_id
-    # )
-    pass
+    result = await order_manager.SEND_PAYMENT_NOTIFICATION(
+        db=db,
+        request_order_id=request_order_id,
+        admin_id=current_user.user_id,
+        background_tasks=background_tasks,
+    )
+    return result
 
 
 @router.post(

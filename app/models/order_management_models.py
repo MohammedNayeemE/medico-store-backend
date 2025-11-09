@@ -156,7 +156,7 @@ class OrderItem(Base):
     batch_id = Column(
         Integer,
         ForeignKey("medicine_batches.batch_id", onupdate="CASCADE"),
-        nullable=False,
+        nullable=True,
     )
     quantity = Column(Integer, nullable=False)
     price = Column(Numeric(12, 2), nullable=False)
@@ -211,7 +211,7 @@ class Invoice(Base):
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )
     invoice_pdf_id = Column(
-        Integer, ForeignKey("file_assets.asset_id", onupdate="CASCADE"), nullable=False
+        Integer, ForeignKey("file_assets.asset_id", onupdate="CASCADE"), nullable=True
     )
     subtotal_amount = Column(DECIMAL(10, 3), nullable=False)
     total_tax = Column(DECIMAL(10, 3), nullable=False)

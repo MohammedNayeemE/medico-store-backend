@@ -1,7 +1,7 @@
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
@@ -17,6 +17,7 @@ from app.api.routes import (
     auth_routes,
     backup_routes,
     cart_routes,
+    content_routes,
     discount_routes,
     file_routes,
     issues_routes,
@@ -29,6 +30,7 @@ from app.api.routes import (
     request_orders,
     review_routes,
     role_routes,
+    dashboard_routes
 )
 from app.api.routes.inventory import router as inventory_router
 from app.core.config import allowed_origins, settings
@@ -44,8 +46,128 @@ app = FastAPI(
     root_path="/api/v1",
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
+    openapi_url="/openapi.json",
+    docs_url=None,
+    redoc_url="/redoc",
 )
 
+@app.get("/docs", include_in_schema=False)
+def custom_docs():
+    html = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <link type="text/css" rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">
+        <link rel="shortcut icon" href="https://fastapi.tiangolo.com/img/favicon.png">
+        <title>Custom Docs with Tag Filter</title>
+    </head>
+    <body>
+        <div id="swagger-ui"></div>
+        <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+
+        <script>
+        const ui = SwaggerUIBundle({
+            url: '/openapi.json',
+            dom_id: '#swagger-ui',
+            layout: 'BaseLayout',
+            deepLinking: true,
+            showExtensions: true,
+            showCommonExtensions: true,
+            presets: [
+                SwaggerUIBundle.presets.apis,
+                SwaggerUIBundle.SwaggerUIStandalonePreset
+            ],
+            onComplete: () => {
+                // Wait for DOM to be ready
+                const authButton = document.querySelector('.btn.authorize.unlocked');
+
+  
+    
+    // Wait a short time in case the modal content loads dynamically
+    setInterval(() => {
+      
+      const modal = document.querySelector('.modal-ux'); // or use your modal selector
+modal.querySelectorAll('*').forEach(el => {
+  el.childNodes.forEach(node => {
+    if (node.nodeType === 3) {
+      const text = node.textContent.trim();
+      if (text.includes('username')) {
+        node.textContent = text.replace(/username/gi, 'Mobile or Email ');
+      }
+      if (text.includes('password')) {
+        node.textContent = text.replace(/password/gi, 'OTP or Password');
+      }
+    }  
+  });
+});
+    }, 5000);
+                setTimeout(() => {
+                    const authWrapper = document.querySelector('.auth-wrapper');
+                    if (authWrapper) {
+                        const dropdown = document.createElement('select');
+                        dropdown.style.marginRight = '10px';
+                        dropdown.innerHTML = `
+                            <option value="">-- Show All --</option>
+                            <option value="default">Root</option>
+                            <option value="Auth">Auth</option>
+                            <option value="Profiles">Profile</option>
+                            <option value="Roles">Roles</option>
+                            <option value="Files Testing">Files</option>
+                            <option value="Medcines">Medcines</option>
+                            <option value="Categories">Categories</option>
+                            <option value="Tags">Tags</option>
+                            <option value="Medicine Alternatives">Medicine Alternatives</option>
+                            <option value="Medicine Batches">Medicine Batches</option>
+                            <option value="Medicine Sideeffects">Medicine Sideeffects</option>
+                            <option value="GST Slabs">GST Slabs</option>
+                            <option value="Cart">Cart</option>
+                            <option value="Prescriptions">Prescriptions</option>
+                            <option value="Request Orders">Request Orders</option>
+                            <option value="Orders">Orders</option>
+                            <option value="Issues">Issues</option>
+                            <option value="Payments">Payments</option>
+                            <option value="Discounts">Discounts</option>
+                            <option value="Medicine Requests">Medicine Requests</option>
+                            <option value="Reviews">Reviews</option>
+                            <option value="Notifications">Notifications</option>
+                            <option value="Backup Management">Backup Management</option>
+                            <option value="Content Management">Content Management</option>
+                            <option value="Dashboard">Dashboard</option>
+                        `;
+
+                        
+                        dropdown.style.zIndex = '9999';
+                        dropdown.style.padding = '8px';
+                        dropdown.style.backgroundColor = '#f5f5f5';
+                        dropdown.style.border = '1px solid #ccc';
+                        dropdown.style.borderRadius = '4px';
+                        dropdown.style.cursor = 'pointer';
+                        dropdown.style.marginRight = '10px';
+
+
+                        dropdown.onchange = function() {
+                            const tag = this.value;
+                            document.querySelectorAll('.opblock-tag-section').forEach(sec => {
+                                const tagName = sec.querySelector('.opblock-tag').textContent.trim();
+                                if (!tag || tagName === tag) {
+                                    sec.style.display = '';
+                                } else {
+                                    sec.style.display = 'none';
+                                }
+                            });
+                        };
+
+                        // Insert dropdown before the auth button
+                        authWrapper.parentNode.insertBefore(dropdown, authWrapper);
+                    }
+                }, 1000); // Small delay to ensure Swagger UI renders
+            }
+        });
+        </script>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html)
 
 # def custom_openapi():
 #     if app.openapi_schema:
@@ -312,3 +434,5 @@ app.include_router(router=request_medicines_routes.router)
 app.include_router(router=review_routes.router)
 app.include_router(router=notification_routes.router)
 app.include_router(router=backup_routes.router)
+app.include_router(router=content_routes.router)
+app.include_router(router=dashboard_routes.router)

@@ -172,6 +172,7 @@ class CustomerProfile(Base):
 
     user_id = Column(Integer, ForeignKey("users.user_id"), primary_key=True)
     name = Column(String(255))
+    email = Column(String(100) , unique=True)
     address_id = Column(Integer, ForeignKey("addresses.address_id"))
     profile_pic = Column(Integer, ForeignKey("file_assets.asset_id"))
     blood_group = Column(String(3))

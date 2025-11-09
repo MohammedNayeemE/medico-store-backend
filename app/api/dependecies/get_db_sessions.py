@@ -1,4 +1,4 @@
-from app.core.database import async_session, get_redis
+from app.core.database import async_session, client, get_redis, mongo_db
 
 
 async def get_postgres():
@@ -6,8 +6,8 @@ async def get_postgres():
         yield session
 
 
-async def get_mongo():
-    pass
+async def get_mongo_db():
+    return mongo_db
 
 
 async def get_redis_client():
