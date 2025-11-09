@@ -4,6 +4,7 @@ from decimal import Decimal
 from enum import Enum
 from typing import List, Optional, Tuple
 
+from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -316,9 +317,16 @@ class PaymentService:
         await db.flush()
 
     async def INITIATE_PAYMENT(
-        self, db: AsyncSession, request_order_id: int, payment_mode: str, user_id: int
+        self,
+        db: AsyncSession,
+        request_order_id: int,
+        payment_mode: str,
+        user_id: int,
+        role_id: int,
     ):
         try:
+            if role_id != 1:
+                raise HTTPException(status_code=403, detail="Forbidden Access")
             result = await db.execute(
                 select(RequestOrder).filter(
                     RequestOrder.request_order_id == request_order_id

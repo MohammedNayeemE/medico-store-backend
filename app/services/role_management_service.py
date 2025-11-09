@@ -1,14 +1,16 @@
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import BackgroundTasks, HTTPException
 from jose import jwt
+from motor.motor_asyncio import AsyncIOMotorDatabase
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models.user_management_models import Permission, Role, RolePermission, User
 from app.schemas.user_schemas import EmployeeCreate, RoleCreate
+from app.services.audit_log_service import AuditLogService
 from app.services.mail_service import MailService
 
 
@@ -27,7 +29,16 @@ class RoleManagementService:
         }
         return jwt.encode(payload, self.A_SECRET_KEY, self.ALGORITHM)
 
-    async def CREATE_ROLE(self, db: AsyncSession, role_data: RoleCreate) -> Role:
+    async def CREATE_ROLE(
+        self,
+        db: AsyncSession,
+        role_data: RoleCreate,
+        mongo_db: Optional[AsyncIOMotorDatabase] = None,
+        actor_id: Optional[int] = None,
+        actor_role: Optional[str] = None,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+    ) -> Role:
         try:
             result = await db.execute(select(Role).filter(Role.name == role_data.name))
             existing_role = result.scalar_one_or_none()
@@ -54,11 +65,57 @@ class RoleManagementService:
                 db.add(role_perm_link)
             await db.commit()
             await db.refresh(role)
+            
+            # Audit logging
+            if mongo_db:
+                audit_service = AuditLogService(mongo_db)
+                await audit_service.LOG_ACTION(
+                    actor_id=actor_id,
+                    actor_role=actor_role,
+                    action="CREATE_ROLE",
+                    resource="roles",
+                    resource_id=role.role_id,
+                    new_data={
+                        "name": role.name,
+                        "description": role.description,
+                        "permissions": role_data.permissions,
+                    },
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                    status="SUCCESS",
+                )
+            
             return role
         except HTTPException:
+            # Log failure
+            if mongo_db:
+                audit_service = AuditLogService(mongo_db)
+                await audit_service.LOG_ACTION(
+                    actor_id=actor_id,
+                    actor_role=actor_role,
+                    action="CREATE_ROLE",
+                    resource="roles",
+                    new_data=role_data.dict() if hasattr(role_data, "dict") else None,
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                    status="FAILURE",
+                )
             raise
         except Exception as e:
             await db.rollback()
+            # Log failure
+            if mongo_db:
+                audit_service = AuditLogService(mongo_db)
+                await audit_service.LOG_ACTION(
+                    actor_id=actor_id,
+                    actor_role=actor_role,
+                    action="CREATE_ROLE",
+                    resource="roles",
+                    new_data=role_data.dict() if hasattr(role_data, "dict") else None,
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                    status="FAILURE",
+                )
             print(
                 "--------------------------------------------------------------------"
             )
@@ -73,6 +130,11 @@ class RoleManagementService:
         name: Optional[str] = None,
         skip: Optional[int] = 0,
         limit: Optional[int] = 0,
+        mongo_db: Optional[AsyncIOMotorDatabase] = None,
+        actor_id: Optional[int] = None,
+        actor_role: Optional[str] = None,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
     ):
         try:
             query = select(Role).filter(Role.is_deleted == False)
@@ -83,10 +145,48 @@ class RoleManagementService:
             roles = result.scalars().all()
             if not roles:
                 raise HTTPException(status_code=404, detail="No roles found")
+            
+            # Audit logging
+            if mongo_db:
+                audit_service = AuditLogService(mongo_db)
+                await audit_service.LOG_ACTION(
+                    actor_id=actor_id,
+                    actor_role=actor_role,
+                    action="GET_ROLES",
+                    resource="roles",
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                    status="SUCCESS",
+                )
+            
             return roles
         except HTTPException:
+            # Log failure
+            if mongo_db:
+                audit_service = AuditLogService(mongo_db)
+                await audit_service.LOG_ACTION(
+                    actor_id=actor_id,
+                    actor_role=actor_role,
+                    action="GET_ROLES",
+                    resource="roles",
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                    status="FAILURE",
+                )
             raise
         except Exception as e:
+            # Log failure
+            if mongo_db:
+                audit_service = AuditLogService(mongo_db)
+                await audit_service.LOG_ACTION(
+                    actor_id=actor_id,
+                    actor_role=actor_role,
+                    action="GET_ROLES",
+                    resource="roles",
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                    status="FAILURE",
+                )
             print("----------------------")
             print(f"[get-roles] error: {e}")
             raise HTTPException(
@@ -94,17 +194,46 @@ class RoleManagementService:
             )
 
     async def UPDATE_ROLE(
-        self, db: AsyncSession, role_id: int, role_data: RoleCreate
+        self,
+        db: AsyncSession,
+        role_id: int,
+        role_data: RoleCreate,
+        mongo_db: Optional[AsyncIOMotorDatabase] = None,
+        actor_id: Optional[int] = None,
+        actor_role: Optional[str] = None,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
     ) -> Role:
         try:
-            result = await db.execute(select(Role).filter(Role.role_id == role_id))
-            role = result.scalar_one_or_none()
-            if not role:
+            # Get old data before update
+            old_role_result = await db.execute(
+                select(Role).filter(Role.role_id == role_id)
+            )
+            old_role = old_role_result.scalar_one_or_none()
+            old_data = None
+            if old_role:
+                # Get old permissions
+                old_perms_result = await db.execute(
+                    select(Permission.name)
+                    .join(
+                        RolePermission,
+                        Permission.permission_id == RolePermission.permission_id,
+                    )
+                    .filter(RolePermission.role_id == role_id)
+                )
+                old_permissions = [perm[0] for perm in old_perms_result.all()]
+                old_data = {
+                    "name": old_role.name,
+                    "description": old_role.description,
+                    "permissions": old_permissions,
+                }
+            
+            if not old_role:
                 raise HTTPException(status_code=404, detail="Role not found")
             if role_data.name:
-                role.name = role_data.name
+                old_role.name = role_data.name
             if role_data.description:
-                role.description = role_data.description
+                old_role.description = role_data.description
             result = await db.execute(
                 select(RolePermission).filter(RolePermission.role_id == role_id)
             )
@@ -132,11 +261,60 @@ class RoleManagementService:
                 ]
             )
             await db.commit()
-            await db.refresh(role)
-            return role
+            await db.refresh(old_role)
+            
+            # Audit logging
+            if mongo_db:
+                audit_service = AuditLogService(mongo_db)
+                await audit_service.LOG_ACTION(
+                    actor_id=actor_id,
+                    actor_role=actor_role,
+                    action="UPDATE_ROLE",
+                    resource="roles",
+                    resource_id=role_id,
+                    old_data=old_data,
+                    new_data={
+                        "name": old_role.name,
+                        "description": old_role.description,
+                        "permissions": role_data.permissions,
+                    },
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                    status="SUCCESS",
+                )
+            
+            return old_role
         except HTTPException:
+            # Log failure
+            if mongo_db:
+                audit_service = AuditLogService(mongo_db)
+                await audit_service.LOG_ACTION(
+                    actor_id=actor_id,
+                    actor_role=actor_role,
+                    action="UPDATE_ROLE",
+                    resource="roles",
+                    resource_id=role_id,
+                    new_data=role_data.dict() if hasattr(role_data, "dict") else None,
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                    status="FAILURE",
+                )
             raise
         except Exception as e:
+            # Log failure
+            if mongo_db:
+                audit_service = AuditLogService(mongo_db)
+                await audit_service.LOG_ACTION(
+                    actor_id=actor_id,
+                    actor_role=actor_role,
+                    action="UPDATE_ROLE",
+                    resource="roles",
+                    resource_id=role_id,
+                    new_data=role_data.dict() if hasattr(role_data, "dict") else None,
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                    status="FAILURE",
+                )
             print("----------------------")
             print(f"[update-role] error : {e}")
             raise HTTPException(
@@ -148,6 +326,11 @@ class RoleManagementService:
         db: AsyncSession,
         employeeData: EmployeeCreate,
         background_tasks: BackgroundTasks,
+        mongo_db: Optional[AsyncIOMotorDatabase] = None,
+        actor_id: Optional[int] = None,
+        actor_role: Optional[str] = None,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
     ):
         try:
             result = await db.execute(
@@ -170,17 +353,78 @@ class RoleManagementService:
             background_tasks.add_task(
                 self.mail_service.SEND_ONBOARDING_MAIL, employeeData.email, magic_link
             )
+            
+            # Audit logging
+            if mongo_db:
+                audit_service = AuditLogService(mongo_db)
+                await audit_service.LOG_ACTION(
+                    actor_id=actor_id,
+                    actor_role=actor_role,
+                    action="ADD_EMPLOYEE",
+                    resource="employees",
+                    resource_id=new_user.user_id,
+                    new_data={
+                        "email": employeeData.email,
+                        "role_id": employeeData.role_id,
+                    },
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                    status="SUCCESS",
+                )
+            
             return {"msg": "Employee added and onboarding mail sent"}
         except HTTPException:
+            # Log failure
+            if mongo_db:
+                audit_service = AuditLogService(mongo_db)
+                await audit_service.LOG_ACTION(
+                    actor_id=actor_id,
+                    actor_role=actor_role,
+                    action="ADD_EMPLOYEE",
+                    resource="employees",
+                    new_data={
+                        "email": employeeData.email,
+                        "role_id": employeeData.role_id,
+                    },
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                    status="FAILURE",
+                )
             raise
         except Exception as e:
+            # Log failure
+            if mongo_db:
+                audit_service = AuditLogService(mongo_db)
+                await audit_service.LOG_ACTION(
+                    actor_id=actor_id,
+                    actor_role=actor_role,
+                    action="ADD_EMPLOYEE",
+                    resource="employees",
+                    new_data={
+                        "email": employeeData.email,
+                        "role_id": employeeData.role_id,
+                    },
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                    status="FAILURE",
+                )
             print("----------------------")
             print(f"[ADD_EMPLOYEE] error : {e}")
             raise HTTPException(
                 status_code=500, detail="internal server error : [ADD_EMPLOYEE]"
             )
 
-    async def GET_EMPLOYEES(self, db: AsyncSession, skip: int = 0, limit: int = 10):
+    async def GET_EMPLOYEES(
+        self,
+        db: AsyncSession,
+        skip: int = 0,
+        limit: int = 10,
+        mongo_db: Optional[AsyncIOMotorDatabase] = None,
+        actor_id: Optional[int] = None,
+        actor_role: Optional[str] = None,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+    ):
         try:
             query = (
                 select(User)
@@ -206,17 +450,64 @@ class RoleManagementService:
                         "is_active": emp.is_active,
                     }
                 )
+            
+            # Audit logging
+            if mongo_db:
+                audit_service = AuditLogService(mongo_db)
+                await audit_service.LOG_ACTION(
+                    actor_id=actor_id,
+                    actor_role=actor_role,
+                    action="GET_EMPLOYEES",
+                    resource="employees",
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                    status="SUCCESS",
+                )
+            
             return response
         except HTTPException:
+            # Log failure
+            if mongo_db:
+                audit_service = AuditLogService(mongo_db)
+                await audit_service.LOG_ACTION(
+                    actor_id=actor_id,
+                    actor_role=actor_role,
+                    action="GET_EMPLOYEES",
+                    resource="employees",
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                    status="FAILURE",
+                )
             raise
         except Exception as e:
+            # Log failure
+            if mongo_db:
+                audit_service = AuditLogService(mongo_db)
+                await audit_service.LOG_ACTION(
+                    actor_id=actor_id,
+                    actor_role=actor_role,
+                    action="GET_EMPLOYEES",
+                    resource="employees",
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                    status="FAILURE",
+                )
             print("----------------------")
             print(f"[GET_EMPLOYEES] error: {e}")
             raise HTTPException(
                 status_code=500, detail="internal server error : [GET_EMPLOYEES]"
             )
 
-    async def GET_PERMISSIONS_FOR_ROLE(self, db: AsyncSession, role_id: int):
+    async def GET_PERMISSIONS_FOR_ROLE(
+        self,
+        db: AsyncSession,
+        role_id: int,
+        mongo_db: Optional[AsyncIOMotorDatabase] = None,
+        actor_id: Optional[int] = None,
+        actor_role: Optional[str] = None,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+    ):
         try:
             result = await db.execute(select(Role).filter(Role.role_id == role_id))
             role = result.scalar_one_or_none()
@@ -235,12 +526,55 @@ class RoleManagementService:
                 raise HTTPException(
                     status_code=404, detail="No permissions found for this role"
                 )
-            return [
+            
+            response = [
                 {"permission_id": p.permission_id, "name": p.name} for p in permissions
             ]
+            
+            # Audit logging
+            if mongo_db:
+                audit_service = AuditLogService(mongo_db)
+                await audit_service.LOG_ACTION(
+                    actor_id=actor_id,
+                    actor_role=actor_role,
+                    action="GET_PERMISSIONS",
+                    resource="roles",
+                    resource_id=role_id,
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                    status="SUCCESS",
+                )
+            
+            return response
         except HTTPException:
+            # Log failure
+            if mongo_db:
+                audit_service = AuditLogService(mongo_db)
+                await audit_service.LOG_ACTION(
+                    actor_id=actor_id,
+                    actor_role=actor_role,
+                    action="GET_PERMISSIONS",
+                    resource="roles",
+                    resource_id=role_id,
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                    status="FAILURE",
+                )
             raise
         except Exception as e:
+            # Log failure
+            if mongo_db:
+                audit_service = AuditLogService(mongo_db)
+                await audit_service.LOG_ACTION(
+                    actor_id=actor_id,
+                    actor_role=actor_role,
+                    action="GET_PERMISSIONS",
+                    resource="roles",
+                    resource_id=role_id,
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                    status="FAILURE",
+                )
             print("----------------------")
             print(f"[GET_PERMISSIONS_FOR_ROLE] error: {e}")
             raise HTTPException(

@@ -38,8 +38,12 @@ class InvoiceService:
                 f"internal server error : [GET_INVOICE_DETAILS]"
             )
 
-    async def GET_CUSTOMER_INVOICES(self, db: AsyncSession, customer_id: int):
+    async def GET_CUSTOMER_INVOICES(
+        self, db: AsyncSession, customer_id: int, role_id: int
+    ):
         try:
+            if role_id != 1:
+                raise HTTPException(status_code=403, detail="Forbidden Access")
             result = await db.execute(
                 select(Invoice).filter(Invoice.user_id == customer_id)
             )

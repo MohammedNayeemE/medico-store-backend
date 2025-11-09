@@ -18,27 +18,33 @@ async def trigger_backup(
     req: BackupCreate,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["admin:write"]),
+    current_user: User = Security(get_current_user, scopes=["backup:write"]),
 ):
     backup = Backup(
         name=req.name,
         backup_type=req.backup_type,
         parts=",".join(req.parts or ["postgres", "mongo", "files"]),
         status="queued",
-        created_by="admin",
+        created_by=current_user.username,
     )
     db.add(backup)
     await db.commit()
     await db.refresh(backup)
 
-    background_tasks.add_task(BackupService.create_backup, db, backup.id, req.parts)
+    background_tasks.add_task(
+        BackupService.create_backup,
+        db,
+        backup.id,
+        req.parts,
+        req.postgres_tables,  # ⬅️ pass table list
+    )
     return backup
 
 
 @router.get("/", response_model=list[BackupRead])
 async def list_backups(
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["admin:read"]),
+    current_user: User = Security(get_current_user, scopes=["backup:read"]),
 ):
     result = await db.execute(select(Backup))
     return result.scalars().all()
@@ -48,7 +54,7 @@ async def list_backups(
 async def get_backup_by_id(
     db: AsyncSession = Depends(get_postgres),
     backup_id: int = Path(...),
-    current_user: User = Security(get_current_user, scopes=["admin:read"]),
+    current_user: User = Security(get_current_user, scopes=["backup:read"]),
 ):
     result = await db.execute(select(Backup).filter(Backup.id == backup_id))
     backup_obj = result.scalar_one_or_none()
@@ -60,7 +66,7 @@ async def restore_backup(
     backup_id: int,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["admin:write"]),
+    current_user: User = Security(get_current_user, scopes=["backup:write"]),
 ):
     background_tasks.add_task(
         RestoreService.restore_backup,
@@ -73,7 +79,7 @@ async def restore_backup(
 @router.get("/restore")
 async def restores(
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["admin:read"]),
+    current_user: User = Security(get_current_user, scopes=["backup:read"]),
 ):
     result = await db.execute(select(Restore))
     return result

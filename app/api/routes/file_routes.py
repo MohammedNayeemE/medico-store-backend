@@ -90,7 +90,7 @@ async def get_file_by_asset_id(
 async def get_prescription_by_asset_id(
     asset_id: int = Path(...),
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user),
+    current_user: User = Security(get_current_user, scopes=["prescription:read"]),
 ):
     result = await file_manager.GET_PRESCRIPTION(
         asset_id=asset_id, db=db, current_user=current_user, bucket=bucket

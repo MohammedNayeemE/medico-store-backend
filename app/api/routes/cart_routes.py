@@ -23,7 +23,7 @@ cart_manager = CartService()
 @router.get("/", description="Get the current user's cart")
 async def get_cart(
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["admin:read"]),
+    current_user: User = Security(get_current_user, scopes=["cart:read"]),
 ):
     result = await cart_manager.GET_USER_CART(db=db, user_id=current_user.user_id)
     return result
@@ -36,7 +36,7 @@ async def get_cart(
 async def add_item_to_cart(
     item_data: CartItemCreate = Body(...),
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user),
+    current_user: User = Security(get_current_user, scopes=["cart:write"]),
 ):
     result = await cart_manager.ADD_ITEM(
         db=db, user_id=current_user.user_id, item_data=item_data
@@ -52,7 +52,7 @@ async def update_cart_item(
     cart_item_id: int = Path(..., description="Cart item ID to update"),
     item_data: CartItemUpdate = Body(...),
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user),
+    current_user: User = Security(get_current_user, scopes=["cart:write"]),
 ):
     result = await cart_manager.UPDATE_ITEM(
         db=db,
@@ -70,7 +70,7 @@ async def update_cart_item(
 async def delete_cart_item(
     cart_item_id: int = Path(..., description="Cart item ID to delete"),
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user),
+    current_user: User = Security(get_current_user, scopes=["cart:delete"]),
 ):
     result = await cart_manager.DELETE_ITEM(
         db=db, cart_item_id=cart_item_id, user_id=current_user.user_id
@@ -84,7 +84,7 @@ async def delete_cart_item(
 )
 async def clear_cart(
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user),
+    current_user: User = Security(get_current_user, scopes=["cart:delete"]),
 ):
     result = await cart_manager.CLEAR_USER_CART(db=db, user_id=current_user.user_id)
     return result
@@ -96,7 +96,7 @@ async def clear_cart(
 )
 async def get_cart_with_discounts(
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user),
+    current_user: User = Security(get_current_user, scopes=["cart:read"]),
 ):
     result = await cart_manager.GET_CART_WITH_DISCOUNTS(
         db=db, user_id=current_user.user_id
@@ -111,7 +111,7 @@ async def get_cart_with_discounts(
 async def apply_coupon(
     coupon_code: str = Path(..., description="Coupon code to apply"),
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user),
+    current_user: User = Security(get_current_user, scopes=["cart:write"]),
 ):
     result = await cart_manager.APPLY_COUPON(
         db=db, user_id=current_user.user_id, coupon_code=coupon_code

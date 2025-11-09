@@ -2,6 +2,7 @@ from typing import List
 
 from fastapi import APIRouter, Body, Depends, Path, Security
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql import roles
 
 from app.api.dependecies.auth import get_current_user
 from app.api.dependecies.get_db_sessions import get_postgres
@@ -48,14 +49,11 @@ async def get_reviews_by_id(
     return result
 
 
-# -----------------------------------------------------------
-# Get reviews of logged-in user
-# -----------------------------------------------------------
 @router.get(
     "/my",
 )
 async def my_reviews(
-    current_user: User = Security(get_current_user, scopes=["user:read"]),
+    current_user: User = Security(get_current_user, scopes=["review:read"]),
     db: AsyncSession = Depends(get_postgres),
 ):
     result = await review_manager.GET_REVIEWS_BY_USER(
@@ -69,10 +67,12 @@ async def my_reviews(
 )
 async def get_reviews_by_user_id(
     customer_id: int = Path(...),
-    current_user: User = Security(get_current_user, scopes=["admin:read"]),
+    current_user: User = Security(get_current_user, scopes=["review:read"]),
     db: AsyncSession = Depends(get_postgres),
 ):
-    result = await review_manager.GET_REVIEWS_BY_USER(db=db, user_id=customer_id)
+    result = await review_manager.GET_REVIEWS_BY_USER(
+        db=db, user_id=customer_id, role_id=current_user.role_id
+    )
     return result
 
 
@@ -80,11 +80,14 @@ async def get_reviews_by_user_id(
 @router.delete("/admin/{review_id}")
 async def delete_review(
     review_id: int = Path(...),
-    current_user: User = Security(get_current_user, scopes=["admin:write"]),
+    current_user: User = Security(get_current_user, scopes=["review:delete"]),
     db: AsyncSession = Depends(get_postgres),
 ):
     result = await review_manager.DELETE_REVIEW(
-        db=db, review_id=review_id, deleted_by=current_user.user_id
+        db=db,
+        review_id=review_id,
+        deleted_by=current_user.user_id,
+        role_id=current_user.role_id,
     )
     return result
 
@@ -98,7 +101,7 @@ async def delete_review(
 async def add_review(
     medicine_id: int = Path(...),
     review_data: ReviewCreate = Body(...),
-    current_user: User = Security(get_current_user, scopes=["user:write"]),
+    current_user: User = Security(get_current_user, scopes=["review:write"]),
     db: AsyncSession = Depends(get_postgres),
 ):
     result = await review_manager.ADD_REVIEW(
@@ -106,5 +109,6 @@ async def add_review(
         user_id=current_user.user_id,
         medicine_id=medicine_id,
         review_data=review_data,
+        role_id=current_user.role_id,
     )
     return result

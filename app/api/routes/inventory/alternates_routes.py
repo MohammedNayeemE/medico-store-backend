@@ -16,7 +16,7 @@ inventory_manager = InventoryManagementService()
 @router.post("/{medicine_id}/alternatives")
 async def link_medicine_to_alternatives(
     medicine_id: int = Path(...),
-    current_user=Security(get_current_user, scopes=["admin:write"]),
+    current_user=Security(get_current_user, scopes=["alternate:write"]),
     db: AsyncSession = Depends(get_postgres),
     alternative_data: AlternativeCreate = Body(...),
 ):
@@ -29,7 +29,7 @@ async def link_medicine_to_alternatives(
 @router.get("/{medicine_id}")
 async def get_medicine_alternatives(
     medicine_id: int = Path(...),
-    current_user=Security(get_current_user, scopes=["admin:write"]),
+    current_user=Security(get_current_user, scopes=["alternate:write"]),
     db: AsyncSession = Depends(get_postgres),
 ):
     result = await inventory_manager.LIST_ALL_MEDICINE_ALTERNATIVES(
@@ -41,7 +41,7 @@ async def get_medicine_alternatives(
 @router.put("/{medicine_id}")
 async def update_link_medicine_to_alternatives(
     medicine_id: int = Path(...),
-    current_user: User = Security(get_current_user, scopes=["admin:write"]),
+    current_user: User = Security(get_current_user, scopes=["alternate:update"]),
     db: AsyncSession = Depends(get_postgres),
     alternative_ids: List[int] = Body(...),
 ):
@@ -70,7 +70,7 @@ async def update_link_medicine_to_alternatives(
 # @router.put("/{alternative_id}", description="Update an alternative by ID")
 # async def update_alternative(
 #     alternative_id: int = Path(...),
-#     current_user=Security(get_current_user, scopes=["admin:write"]),
+#     current_user=Security(get_current_user, scopes=["alternate:write"]),
 #     db: AsyncSession = Depends(get_postgres),
 #     alternative_data: AlternativeCreate = Body(...),
 # ):

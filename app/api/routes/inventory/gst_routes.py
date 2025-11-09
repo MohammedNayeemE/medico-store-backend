@@ -15,7 +15,7 @@ inventory_manager = InventoryManagementService()
 
 @router.get("/download-template", description="download the GST slab template")
 async def download_template(
-    current_user: User = Security(get_current_user, scopes=["admin:read"])
+    current_user: User = Security(get_current_user, scopes=["gst:read"])
 ):
     result = await inventory_manager.DOWNLOAD_GST_SLAB_TEMPLATE()
     return result
@@ -27,7 +27,7 @@ async def download_template(
 )
 async def bulk_upload_gst_slabs(
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["admin:write"]),
+    current_user: User = Security(get_current_user, scopes=["gst:write"]),
     file: UploadFile = File(...),
 ):
     result = await inventory_manager.BULK_UPLOAD_GST_SLABS(db=db, file=file)
@@ -36,7 +36,7 @@ async def bulk_upload_gst_slabs(
 
 @router.post("/", description="Create a GST slab entry")
 async def create_gst_slab(
-    current_user=Security(get_current_user, scopes=["admin:write"]),
+    current_user=Security(get_current_user, scopes=["gst:write"]),
     db: AsyncSession = Depends(get_postgres),
     gst_slab_data: GSTSlabCreate = Body(...),
 ):
@@ -46,7 +46,7 @@ async def create_gst_slab(
 
 @router.get("/", description="List all GST slabs with pagination")
 async def list_all_gst_slabs(
-    current_user=Security(get_current_user, scopes=["admin:read"]),
+    current_user=Security(get_current_user, scopes=["gst:read"]),
     db: AsyncSession = Depends(get_postgres),
     skip: int = Query(0, ge=0),
     limit: int = Query(10, le=100),
@@ -58,7 +58,7 @@ async def list_all_gst_slabs(
 @router.get("/{hsn_code}", description="Get a GST slab by HSN code")
 async def get_gst_slab(
     hsn_code: str = Path(...),
-    current_user=Security(get_current_user, scopes=["admin:read"]),
+    current_user=Security(get_current_user, scopes=["gst:read"]),
     db: AsyncSession = Depends(get_postgres),
 ):
     result = await inventory_manager.GET_GST_SLAB_BY_HSN(db=db, hsn_code=hsn_code)
@@ -68,7 +68,7 @@ async def get_gst_slab(
 @router.put("/{hsn_code}", description="Update a GST slab by HSN code")
 async def update_gst_slab(
     hsn_code: str = Path(...),
-    current_user=Security(get_current_user, scopes=["admin:write"]),
+    current_user=Security(get_current_user, scopes=["gst:write"]),
     db: AsyncSession = Depends(get_postgres),
     gst_slab_data: GSTSlabCreate = Body(...),
 ):
@@ -81,7 +81,7 @@ async def update_gst_slab(
 @router.delete("/{hsn_code}", description="Soft delete a GST slab by HSN code")
 async def soft_delete_gst_slab(
     hsn_code: str = Path(...),
-    current_user: User = Security(get_current_user, scopes=["admin:write"]),
+    current_user: User = Security(get_current_user, scopes=["gst:write"]),
     db: AsyncSession = Depends(get_postgres),
 ):
     result = await inventory_manager.SOFT_DELETE_GST_SLAB(

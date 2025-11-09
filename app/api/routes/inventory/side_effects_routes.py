@@ -13,7 +13,7 @@ inventory_manager = InventoryManagementService()
 
 @router.get("/download-template", description="download the side effect template")
 async def download_template(
-    current_user: User = Security(get_current_user, scopes=["admin:read"])
+    current_user: User = Security(get_current_user, scopes=["side_effect:read"])
 ):
     result = await inventory_manager.DOWNLOAD_SIDE_EFFECT_TEMPLATE()
     return result
@@ -25,7 +25,7 @@ async def download_template(
 )
 async def bulk_upload_side_effects(
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["admin:write"]),
+    current_user: User = Security(get_current_user, scopes=["side_effect:write"]),
     file: UploadFile = File(...),
 ):
     result = await inventory_manager.BULK_UPLOAD_SIDE_EFFECTS(db=db, file=file)
@@ -34,7 +34,7 @@ async def bulk_upload_side_effects(
 
 @router.post("/", description="Create a side effect entry")
 async def create_side_effect(
-    current_user=Security(get_current_user, scopes=["admin:write"]),
+    current_user=Security(get_current_user, scopes=["side_effect:write"]),
     db: AsyncSession = Depends(get_postgres),
     side_effect_data: SideEffectCreate = Body(...),
 ):
@@ -46,7 +46,7 @@ async def create_side_effect(
 
 @router.get("/", description="List all side effects with pagination")
 async def list_all_side_effects(
-    current_user=Security(get_current_user, scopes=["admin:read"]),
+    current_user=Security(get_current_user, scopes=["side_effect:read"]),
     db: AsyncSession = Depends(get_postgres),
     skip: int = Query(0, ge=0),
     limit: int = Query(10, le=100),
@@ -61,7 +61,7 @@ async def list_all_side_effects(
     "/{side_effect_id}", description="Get side effect details by ID"
 )
 async def get_side_effects_by_id(
-    current_user=Security(get_current_user, scopes=["admin:read"]),
+    current_user=Security(get_current_user, scopes=["side_effect:read"]),
     db: AsyncSession = Depends(get_postgres),
     side_effect_id: int = Path(...),
 ):
@@ -74,7 +74,7 @@ async def get_side_effects_by_id(
 @router.put("/{side_effect_id}", description="Update a side effect by ID")
 async def update_side_effect(
     side_effect_id: int = Path(...),
-    current_user=Security(get_current_user, scopes=["admin:write"]),
+    current_user=Security(get_current_user, scopes=["side_effect:write"]),
     db: AsyncSession = Depends(get_postgres),
     side_effect_data: SideEffectCreate = Body(...),
 ):
@@ -89,7 +89,7 @@ async def update_side_effect(
 )
 async def soft_delete_side_effect(
     side_effect_id: int = Path(...),
-    current_user: User = Security(get_current_user, scopes=["admin:write"]),
+    current_user: User = Security(get_current_user, scopes=["side_effect:write"]),
     db: AsyncSession = Depends(get_postgres),
 ):
     result = await inventory_manager.SOFT_DELETE_SIDE_EFFECT(

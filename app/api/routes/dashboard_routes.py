@@ -1,23 +1,24 @@
-from fastapi import APIRouter, Depends, Query
-from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional
 
+from fastapi import APIRouter, Depends, Query, Security
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.api.dependecies.auth import get_current_user  # Assuming admin auth
+from app.api.dependecies.get_db_sessions import get_postgres as get_db
 from app.schemas.dashboard_schemas import (
-    DashboardOverview,
-    OrderStatistics,
-    SalesAnalytics,
     CategoryDistribution,
+    CompleteDashboard,
+    DashboardOverview,
     InventoryAlerts,
+    OrdersByDate,
+    OrderStatistics,
+    OrderTrendData,
     PendingRequests,
     ProductStatistics,
     RevenueBreakdown,
-    CompleteDashboard,
-    OrderTrendData,
-    OrdersByDate
+    SalesAnalytics,
 )
 from app.services.dashboard_service import DashboardService
-from app.api.dependecies.get_db_sessions import get_postgres as get_db
-from app.api.dependecies.auth import get_current_user  # Assuming admin auth
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 
@@ -31,11 +32,11 @@ def get_dashboard_service(db: AsyncSession = Depends(get_db)) -> DashboardServic
 async def get_complete_dashboard(
     period: str = Query("30d", description="Period: 7d, 30d, 90d, 1y, all"),
     service: DashboardService = Depends(get_dashboard_service),
-    current_user = Depends(get_current_user)
+    current_user=Security(get_current_user, scopes=["dashboard:read"]),
 ):
     """
     Get complete dashboard with all statistics (Admin only)
-    
+
     **Period options:**
     - 7d: Last 7 days
     - 30d: Last 30 days (default)
@@ -51,11 +52,11 @@ async def get_complete_dashboard(
 async def get_dashboard_overview(
     period: str = Query("30d", description="Period: 7d, 30d, 90d, 1y, all"),
     service: DashboardService = Depends(get_dashboard_service),
-    current_user = Depends(get_current_user)
+    current_user=Security(get_current_user, scopes=["dashboard:read"]),
 ):
     """
     Get high-level dashboard overview
-    
+
     Includes:
     - Total orders
     - Total sales
@@ -74,11 +75,11 @@ async def get_dashboard_overview(
 async def get_order_statistics(
     period: str = Query("30d", description="Period: 7d, 30d, 90d, 1y, all"),
     service: DashboardService = Depends(get_dashboard_service),
-    current_user = Depends(get_current_user)
+    current_user=Security(get_current_user, scopes=["dashboard:read"]),
 ):
     """
     Get comprehensive order statistics
-    
+
     Includes:
     - Total orders
     - Total revenue
@@ -93,7 +94,7 @@ async def get_order_statistics(
 async def get_orders_by_date(
     period: str = Query("30d", description="Period: 7d, 30d, 90d, 1y, all"),
     service: DashboardService = Depends(get_dashboard_service),
-    current_user = Depends(get_current_user)
+    current_user=Security(get_current_user, scopes=["dashboard:read"]),
 ):
     """Get orders grouped by date"""
     stats = await service.get_order_statistics(period)
@@ -105,11 +106,11 @@ async def get_orders_by_date(
 async def get_sales_analytics(
     period: str = Query("30d", description="Period: 7d, 30d, 90d, 1y, all"),
     service: DashboardService = Depends(get_dashboard_service),
-    current_user = Depends(get_current_user)
+    current_user=Security(get_current_user, scopes=["dashboard:read"]),
 ):
     """
     Get detailed sales analytics
-    
+
     Includes:
     - Total sales
     - Sales by day/week/month
@@ -122,7 +123,7 @@ async def get_sales_analytics(
 async def get_sales_trends(
     period: str = Query("30d", description="Period: 7d, 30d, 90d, 1y, all"),
     service: DashboardService = Depends(get_dashboard_service),
-    current_user = Depends(get_current_user)
+    current_user=Security(get_current_user, scopes=["dashboard:read"]),
 ):
     """Get sales trends over time"""
     return await service.get_sales_analytics(period)
@@ -133,11 +134,11 @@ async def get_sales_trends(
 async def get_category_distribution(
     period: str = Query("30d", description="Period: 7d, 30d, 90d, 1y, all"),
     service: DashboardService = Depends(get_dashboard_service),
-    current_user = Depends(get_current_user)
+    current_user=Security(get_current_user, scopes=["dashboard:read"]),
 ):
     """
     Get sales distribution by category
-    
+
     Shows:
     - Product count per category
     - Total quantity sold
@@ -153,11 +154,11 @@ async def get_inventory_alerts(
     low_stock_threshold: int = Query(10, description="Low stock threshold"),
     expiry_days: int = Query(60, description="Days until expiry warning"),
     service: DashboardService = Depends(get_dashboard_service),
-    current_user = Depends(get_current_user)
+    current_user=Security(get_current_user, scopes=["dashboard:read"]),
 ):
     """
     Get inventory alerts
-    
+
     Includes:
     - Low stock items (below threshold)
     - Near expiry items (expiring within specified days)
@@ -169,7 +170,7 @@ async def get_inventory_alerts(
 async def get_low_stock_alerts(
     threshold: int = Query(10, description="Stock level threshold"),
     service: DashboardService = Depends(get_dashboard_service),
-    current_user = Depends(get_current_user)
+    current_user=Security(get_current_user, scopes=["dashboard:read"]),
 ):
     """Get only low stock alerts"""
     alerts = await service.get_inventory_alerts(threshold, 60)
@@ -180,22 +181,24 @@ async def get_low_stock_alerts(
 async def get_near_expiry_alerts(
     days: int = Query(60, description="Days until expiry"),
     service: DashboardService = Depends(get_dashboard_service),
-    current_user = Depends(get_current_user)
+    current_user=Security(get_current_user, scopes=["dashboard:read"]),
 ):
     """Get only near expiry alerts"""
     alerts = await service.get_inventory_alerts(10, days)
-    return InventoryAlerts(low_stock_items=[], near_expiry_items=alerts.near_expiry_items)
+    return InventoryAlerts(
+        low_stock_items=[], near_expiry_items=alerts.near_expiry_items
+    )
 
 
 # ============= PENDING REQUESTS =============
 @router.get("/pending", response_model=PendingRequests)
 async def get_pending_requests(
     service: DashboardService = Depends(get_dashboard_service),
-    current_user = Depends(get_current_user)
+    current_user=Security(get_current_user, scopes=["dashboard:read"]),
 ):
     """
     Get all pending items requiring attention
-    
+
     Includes:
     - Pending request orders (waiting for approval)
     - Pending medicine requests
@@ -207,42 +210,36 @@ async def get_pending_requests(
 @router.get("/pending/request-orders", response_model=PendingRequests)
 async def get_pending_request_orders(
     service: DashboardService = Depends(get_dashboard_service),
-    current_user = Depends(get_current_user)
+    current_user=Security(get_current_user, scopes=["dashboard:read"]),
 ):
     """Get only pending request orders"""
     requests = await service.get_pending_requests()
     return PendingRequests(
-        request_orders=requests.request_orders,
-        medicine_requests=[],
-        open_issues=[]
+        request_orders=requests.request_orders, medicine_requests=[], open_issues=[]
     )
 
 
 @router.get("/pending/medicine-requests", response_model=PendingRequests)
 async def get_pending_medicine_requests(
     service: DashboardService = Depends(get_dashboard_service),
-    current_user = Depends(get_current_user)
+    current_user=Security(get_current_user, scopes=["dashboard:read"]),
 ):
     """Get only pending medicine requests"""
     requests = await service.get_pending_requests()
     return PendingRequests(
-        request_orders=[],
-        medicine_requests=requests.medicine_requests,
-        open_issues=[]
+        request_orders=[], medicine_requests=requests.medicine_requests, open_issues=[]
     )
 
 
 @router.get("/pending/issues", response_model=PendingRequests)
 async def get_open_issues(
     service: DashboardService = Depends(get_dashboard_service),
-    current_user = Depends(get_current_user)
+    current_user=Security(get_current_user, scopes=["dashboard:read"]),
 ):
     """Get only open issues"""
     requests = await service.get_pending_requests()
     return PendingRequests(
-        request_orders=[],
-        medicine_requests=[],
-        open_issues=requests.open_issues
+        request_orders=[], medicine_requests=[], open_issues=requests.open_issues
     )
 
 
@@ -250,11 +247,11 @@ async def get_open_issues(
 @router.get("/products/statistics", response_model=ProductStatistics)
 async def get_product_statistics(
     service: DashboardService = Depends(get_dashboard_service),
-    current_user = Depends(get_current_user)
+    current_user=Security(get_current_user, scopes=["dashboard:read"]),
 ):
     """
     Get product/medicine statistics
-    
+
     Includes:
     - Total medicines
     - Total categories
@@ -271,11 +268,11 @@ async def get_product_statistics(
 async def get_revenue_breakdown(
     period: str = Query("30d", description="Period: 7d, 30d, 90d, 1y, all"),
     service: DashboardService = Depends(get_dashboard_service),
-    current_user = Depends(get_current_user)
+    current_user=Security(get_current_user, scopes=["dashboard:read"]),
 ):
     """
     Get revenue breakdown
-    
+
     Includes:
     - Total revenue
     - Paid amount
@@ -289,15 +286,15 @@ async def get_revenue_breakdown(
 @router.get("/quick-stats")
 async def get_quick_stats(
     service: DashboardService = Depends(get_dashboard_service),
-    current_user = Depends(get_current_user)
+    current_user=Security(get_current_user, scopes=["dashboard:read"]),
 ):
     """
     Get quick statistics for dashboard widgets
-    
+
     Returns key metrics in a simplified format
     """
     overview = await service.get_dashboard_overview("30d")
-    
+
     return {
         "total_orders": overview.total_orders,
         "total_sales": float(overview.total_sales),
@@ -307,8 +304,8 @@ async def get_quick_stats(
             "open_issues": overview.open_issues,
             "medicine_requests": overview.pending_medicine_requests,
             "low_stock": overview.low_stock_count,
-            "near_expiry": overview.near_expiry_count
-        }
+            "near_expiry": overview.near_expiry_count,
+        },
     }
 
 
@@ -318,19 +315,19 @@ async def export_sales_data(
     period: str = Query("30d", description="Period: 7d, 30d, 90d, 1y, all"),
     format: str = Query("json", description="Export format: json, csv"),
     service: DashboardService = Depends(get_dashboard_service),
-    current_user = Depends(get_current_user)
+    current_user=Security(get_current_user, scopes=["dashboard:read"]),
 ):
     """
     Export sales data for reporting
-    
+
     Supports JSON and CSV formats
     """
     sales = await service.get_sales_analytics(period)
-    
+
     if format == "csv":
         # You can implement CSV export using pandas or csv module
         return {"message": "CSV export not implemented yet"}
-    
+
     return sales
 
 
@@ -339,12 +336,13 @@ async def export_orders_data(
     period: str = Query("30d", description="Period: 7d, 30d, 90d, 1y, all"),
     format: str = Query("json", description="Export format: json, csv"),
     service: DashboardService = Depends(get_dashboard_service),
-    current_user = Depends(get_current_user)
+    current_user=Security(get_current_user, scopes=["dashboard:read"]),
 ):
     """Export orders data for reporting"""
     orders = await service.get_order_statistics(period)
-    
+
     if format == "csv":
         return {"message": "CSV export not implemented yet"}
-    
+
     return orders
+

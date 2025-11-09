@@ -3,6 +3,7 @@ import json
 import os
 import shutil
 import subprocess
+from typing import List, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,7 +16,11 @@ class BackupService:
 
     @classmethod
     async def create_backup(
-        cls, db: AsyncSession, backup_id: int, parts: list[str] | None
+        cls,
+        db: AsyncSession,
+        backup_id: int,
+        parts: Optional[List[str]] = None,
+        postgres_tables: Optional[List[str]] = None,  # ⬅️ new argument
     ):
         backup = await db.get(Backup, backup_id)
         backup.status = "running"
@@ -26,7 +31,6 @@ class BackupService:
         os.makedirs(temp_dir, exist_ok=True)
 
         try:
-            # manifest tracks which components were backed up
             manifest = {
                 "timestamp": timestamp,
                 "parts": parts or ["postgres", "mongo"],
@@ -35,28 +39,54 @@ class BackupService:
             # --- PostgreSQL Backup ---
             if not parts or "postgres" in parts:
                 pg_file = os.path.join(temp_dir, f"postgres_{timestamp}.dump")
-                pg_cmd = [
-                    "pg_dump",
-                    "-h",
-                    settings.POSTGRES_HOST,
-                    "-U",
-                    settings.POSTGRES_USER,
-                    "-d",
-                    settings.POSTGRES_DB,
-                    "-F",
-                    "c",
-                    "-f",
-                    pg_file,
-                ]
-                subprocess.run(pg_cmd, check=True)
-                manifest["postgres"] = os.path.basename(pg_file)
 
-            # --- MongoDB Backup (includes GridFS) ---
+                # ✅ Selective table backup support
+                if postgres_tables:
+                    # Build command for selected tables
+                    pg_cmd = [
+                        "pg_dump",
+                        "-h",
+                        settings.POSTGRES_HOST,
+                        "-U",
+                        settings.POSTGRES_USER,
+                        "-d",
+                        settings.POSTGRES_DB,
+                        "-F",
+                        "c",  # custom format
+                        "-f",
+                        pg_file,
+                    ]
+                    # Add each table name individually
+                    for table in postgres_tables:
+                        pg_cmd.extend(["-t", table])
+                else:
+                    # Default full database dump
+                    pg_cmd = [
+                        "pg_dump",
+                        "-h",
+                        settings.POSTGRES_HOST,
+                        "-U",
+                        settings.POSTGRES_USER,
+                        "-d",
+                        settings.POSTGRES_DB,
+                        "-F",
+                        "c",
+                        "-f",
+                        pg_file,
+                    ]
+
+                subprocess.run(pg_cmd, check=True)
+                manifest["postgres"] = {
+                    "file": os.path.basename(pg_file),
+                    "tables": postgres_tables or "ALL",
+                }
+
+            # --- MongoDB Backup ---
             if not parts or "mongo" in parts:
                 mongo_file = os.path.join(temp_dir, f"mongo_{timestamp}.archive.gz")
                 mongo_cmd = [
                     "mongodump",
-                    f"--uri={settings.MONGO_URI}",  # ensure this is the correct URI
+                    f"--uri={settings.MONGO_URI}",
                     f"--archive={mongo_file}",
                     "--gzip",
                 ]
@@ -72,10 +102,10 @@ class BackupService:
             final_path = os.path.join(cls.BACKUP_DIR, f"backup_{timestamp}.tar.gz")
             shutil.make_archive(final_path.replace(".tar.gz", ""), "gztar", temp_dir)
 
-            # --- Cleanup temporary files ---
+            # --- Cleanup ---
             shutil.rmtree(temp_dir)
 
-            # --- Update backup metadata ---
+            # --- Update metadata ---
             backup.status = "success"
             backup.finished_at = datetime.datetime.now()
             backup.artifact_path = final_path
@@ -86,4 +116,4 @@ class BackupService:
             backup.status = "failed"
             backup.error_message = str(e)
             await db.commit()
-            raise e
+            raise

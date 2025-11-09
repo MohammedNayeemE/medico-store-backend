@@ -14,10 +14,12 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.api.dependecies.get_db_sessions import get_postgres, get_redis_client
 from app.api.routes import (
+    audit_logs_routes,
     auth_routes,
     backup_routes,
     cart_routes,
     content_routes,
+    dashboard_routes,
     discount_routes,
     file_routes,
     issues_routes,
@@ -30,7 +32,6 @@ from app.api.routes import (
     request_orders,
     review_routes,
     role_routes,
-    dashboard_routes
 )
 from app.api.routes.inventory import router as inventory_router
 from app.core.config import allowed_origins, settings
@@ -51,6 +52,7 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
+
 @app.get("/docs", include_in_schema=False)
 def custom_docs():
     html = """
@@ -64,7 +66,6 @@ def custom_docs():
     <body>
         <div id="swagger-ui"></div>
         <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
-
         <script>
         const ui = SwaggerUIBundle({
             url: '/openapi.json',
@@ -80,9 +81,6 @@ def custom_docs():
             onComplete: () => {
                 // Wait for DOM to be ready
                 const authButton = document.querySelector('.btn.authorize.unlocked');
-
-  
-    
     // Wait a short time in case the modal content loads dynamically
     setInterval(() => {
       
@@ -113,12 +111,12 @@ modal.querySelectorAll('*').forEach(el => {
                             <option value="Profiles">Profile</option>
                             <option value="Roles">Roles</option>
                             <option value="Files Testing">Files</option>
-                            <option value="Medcines">Medcines</option>
+                            <option value="Medicines">Medicines</option>
                             <option value="Categories">Categories</option>
                             <option value="Tags">Tags</option>
                             <option value="Medicine Alternatives">Medicine Alternatives</option>
                             <option value="Medicine Batches">Medicine Batches</option>
-                            <option value="Medicine Sideeffects">Medicine Sideeffects</option>
+                            <option value="Medicine Sideffects">Medicine Sideeffects</option>
                             <option value="GST Slabs">GST Slabs</option>
                             <option value="Cart">Cart</option>
                             <option value="Prescriptions">Prescriptions</option>
@@ -133,6 +131,8 @@ modal.querySelectorAll('*').forEach(el => {
                             <option value="Backup Management">Backup Management</option>
                             <option value="Content Management">Content Management</option>
                             <option value="Dashboard">Dashboard</option>
+                            <option value="Audit LOGS">Logs</option>
+
                         `;
 
                         
@@ -169,54 +169,7 @@ modal.querySelectorAll('*').forEach(el => {
     """
     return HTMLResponse(content=html)
 
-# def custom_openapi():
-#     if app.openapi_schema:
-#         return app.openapi_schema
-#
-#     base_url = "http://localhost:8000"
-#     openapi_schema = get_openapi(
-#         title=app.title,
-#         version=app.version,
-#         description=app.description,
-#         routes=app.routes,
-#     )
-#
-#     openapi_schema["components"]["securitySchemes"] = {
-#         "AdminOAuth2": {
-#             "type": "oauth2",
-#             "flows": {
-#                 "password": {
-#                     "tokenUrl": f"{base_url}/auth/admin/token",
-#                     "scopes": {
-#                         "profile:read": "Read admin profiles",
-#                         "profile:write": "Write admin profiles",
-#                     },
-#                 }
-#             },
-#         },
-#         "CustomerOAuth2": {
-#             "type": "oauth2",
-#             "flows": {
-#                 "password": {
-#                     "tokenUrl": f"{base_url}/auth/customer/token",
-#                     "scopes": {
-#                         "customer_profile:read": "Read customer profiles",
-#                         "customer_profile:write": "Write customer profiles",
-#                     },
-#                 }
-#             },
-#         },
-#     }
-#
-#     # ✅ Keep a lightweight global security declaration
-#     # This initializes Swagger OAuth UI but does not force security on all routes
-#     openapi_schema.setdefault("security", [{"AdminOAuth2": []}, {"CustomerOAuth2": []}])
-#
-#     app.openapi_schema = openapi_schema
-#     return app.openapi_schema
-#
-#
-# app.openapi = custom_openapi
+
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1"])
 app.add_middleware(
     CORSMiddleware,
@@ -436,3 +389,4 @@ app.include_router(router=notification_routes.router)
 app.include_router(router=backup_routes.router)
 app.include_router(router=content_routes.router)
 app.include_router(router=dashboard_routes.router)
+app.include_router(router=audit_logs_routes.router)

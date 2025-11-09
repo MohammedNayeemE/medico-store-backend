@@ -147,6 +147,7 @@ class CustomerProfileCreate(BaseModel):
     gender: Optional[str] = Field(
         None, pattern=r"^[MF]$", example="F", description="Gender: M or F"
     )
+    email: Optional[str] = Field(None, examples=["khan@gmail.com"])
     dob: Optional[date] = Field(None, example="1998-03-15")
 
 

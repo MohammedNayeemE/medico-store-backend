@@ -2,6 +2,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Body, Depends, File, Path, Query, Security, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql import roles
 
 from app.api.dependecies.auth import get_current_user
 from app.api.dependecies.get_db_sessions import get_postgres
@@ -23,10 +24,14 @@ order_manager = OrderService()
 async def upload_prescription(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["admin:write"]),
+    current_user: User = Security(get_current_user, scopes=["prescription:write"]),
 ):
     result = await order_manager.UPLOAD_PRESCRIPTION(
-        db=db, file=file, customer_id=current_user.user_id, bucket=bucket
+        db=db,
+        file=file,
+        customer_id=current_user.user_id,
+        bucket=bucket,
+        role_id=current_user.role_id,
     )
     return result
 
@@ -39,10 +44,14 @@ async def get_customer_prescriptions(
     skip: int = Query(0, ge=0, description="range"),
     limit: int = Query(10, ge=1, le=50, description="Items per page"),
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["admin:read"]),
+    current_user: User = Security(get_current_user, scopes=["prescription:read"]),
 ):
     result = await order_manager.GET_CUSTOMER_PRESCRIPTIONS(
-        db=db, customer_id=current_user.user_id, skip=skip, limit=limit
+        db=db,
+        customer_id=current_user.user_id,
+        skip=skip,
+        limit=limit,
+        role_id=current_user.role_id,
     )
     return result
 
@@ -54,7 +63,7 @@ async def get_customer_prescriptions(
 async def get_prescription_details(
     prescription_id: int = Path(...),
     db: AsyncSession = Depends(get_postgres),
-    current_user=Security(get_current_user, scopes=["admin:read"]),
+    current_user=Security(get_current_user, scopes=["prescription:read"]),
 ):
     result = await order_manager.GET_PRESCRIPTION_DETAILS(
         db=db, prescription_id=prescription_id
@@ -70,7 +79,7 @@ async def verify_prescription(
     prescription_id: int = Path(...),
     prescription_data: VerifyPrescription = Body(...),
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["admin:write"]),
+    current_user: User = Security(get_current_user, scopes=["prescription:write"]),
 ):
     result = await order_manager.VERIFY_PRESCRIPTION(
         db=db,
@@ -78,16 +87,21 @@ async def verify_prescription(
         is_verified=prescription_data.is_verified,
         verified_by=current_user.user_id,
         notes=prescription_data.notes,
+        role_id=current_user.role_id,
     )
     return result
 
 
-@router.delete("/{prescription_id}", description="Soft delete a prescription")
+@router.delete(
+    "/{prescription_id}",
+    description="Soft delete a prescription",
+    include_in_schema=False,
+)
 async def soft_delete_prescription(
     prescription_id: int = Path(...),
     deleted_by: Optional[int] = Body(None, embed=True),
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["admin:write"]),
+    current_user: User = Security(get_current_user, scopes=["prescription:write"]),
 ):
     result = order_manager.SOFT_DELETE_PRESCRIPTION(
         db=db, prescription_id=prescription_id, deleted_by=current_user.user_id

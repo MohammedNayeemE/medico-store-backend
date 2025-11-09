@@ -3,6 +3,7 @@ from typing import List
 from fastapi import APIRouter, Body, Depends, File, Path, Query, Security, UploadFile
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql import roles
 
 from app.api.dependecies.auth import get_current_user
 from app.api.dependecies.get_db_sessions import get_postgres
@@ -39,9 +40,11 @@ async def get_dev_route():
 )
 async def get_admin_profile(
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["admin:read"]),
+    current_user: User = Security(get_current_user, scopes=["profile:read"]),
 ):
-    result = await profile.GET_ADMIN_PROFILE(admin_id=current_user.user_id, db=db)
+    result = await profile.GET_ADMIN_PROFILE(
+        admin_id=current_user.user_id, db=db, role_id=current_user.role_id
+    )
     return result
 
 
@@ -52,7 +55,7 @@ async def get_admin_profile(
 async def upload_admin_pic(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_postgres),
-    current_user=Security(get_current_user, scopes=[]),
+    current_user=Security(get_current_user, scopes=["profile:write"]),
 ):
     result = await file_manager.UPLOAD_SINGLE_FILE(
         bucket=bucket, db=db, user_id=current_user.user_id, file=file
@@ -68,11 +71,14 @@ async def upload_admin_pic(
 )
 async def update_admin_profile(
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["admin:write"]),
+    current_user: User = Security(get_current_user, scopes=["profile:update"]),
     profile_data: AdminProfileCreate = Body(...),
 ):
     result = await profile.UPDATE_ADMIN_PROFILE(
-        admin_id=current_user.user_id, db=db, profile_data=profile_data
+        admin_id=current_user.user_id,
+        db=db,
+        profile_data=profile_data,
+        role_id=current_user.role_id,
     )
     return result
 
@@ -84,9 +90,11 @@ async def update_admin_profile(
 )
 async def get_customer_profile(
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["customer:read"]),
+    current_user: User = Security(get_current_user, scopes=["profile:read"]),
 ):
-    result = await profile.GET_CUSTOMER_PROFILE(db=db, customer_id=current_user.user_id)
+    result = await profile.GET_CUSTOMER_PROFILE(
+        db=db, customer_id=current_user.user_id, role_id=current_user.role_id
+    )
     return result
 
 
@@ -94,10 +102,13 @@ async def get_customer_profile(
 async def update_customer_profile(
     profile_data: CustomerProfileCreate,
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["customer:write"]),
+    current_user: User = Security(get_current_user, scopes=["profile:write"]),
 ):
-    result = await profile.update_customer_profile(
-        db=db, customer_id=current_user.user_id, profile_data=profile_data
+    result = await profile.UPDATE_CUSTOMER_PROFILE(
+        db=db,
+        customer_id=current_user.user_id,
+        profile_data=profile_data,
+        role_id=current_user.role_id,
     )
     return result
 
@@ -108,10 +119,10 @@ async def update_customer_profile(
 )
 async def get_customer_addresses(
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["customer:read"]),
+    current_user: User = Security(get_current_user, scopes=["profile:read"]),
 ):
     result = await profile.GET_CUSTOMER_ADDRESSES(
-        customer_id=current_user.user_id, db=db
+        customer_id=current_user.user_id, db=db, role_id=current_user.role_id
     )
     return result
 
@@ -119,7 +130,7 @@ async def get_customer_addresses(
 @router.post("/add-address", description="Add address of the customer")
 async def add_addresses(
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["customer:write"]),
+    current_user: User = Security(get_current_user, scopes=["profile:write"]),
     latitude: float = Query(...),
     longitude: float = Query(...),
     type_id: int = Query(None),
@@ -130,6 +141,7 @@ async def add_addresses(
         longitude=longitude,
         latitude=latitude,
         type_id=type_id,
+        role_id=current_user.role_id,
     )
     return result
 
@@ -138,7 +150,7 @@ async def add_addresses(
 async def add_address_type(
     data: AddressTypeCreate,
     db: AsyncSession = Depends(get_postgres),
-    current_user=Security(get_current_user, scopes=["admin:write"]),
+    current_user=Security(get_current_user, scopes=["address_type:write"]),
 ):
     result = await profile.ADD_ADDRESS_TYPE(db=db, data=data)
     return result
@@ -150,7 +162,7 @@ async def add_address_type(
 )
 async def get_address_types(
     db: AsyncSession = Depends(get_postgres),
-    current_user=Security(get_current_user, scopes=[]),
+    current_user=Security(get_current_user),
 ):
     result = await profile.GET_ALL_ADDRESS_TYPES(db=db)
     return result
@@ -164,7 +176,7 @@ async def update_address_type(
     type_id: int = Path(...),
     data: AddressTypeUpdate = Body(...),
     db: AsyncSession = Depends(get_postgres),
-    current_user=Security(get_current_user, scopes=["admin:write"]),
+    current_user=Security(get_current_user, scopes=["address_type:write"]),
 ):
     result = await profile.UPDATE_ADDRESS_TYPE(db=db, data=data, type_id=type_id)
     return result
@@ -174,7 +186,7 @@ async def update_address_type(
 async def delete_address_type(
     type_id: int = Path(...),
     db: AsyncSession = Depends(get_postgres),
-    current_user=Security(get_current_user, scopes=["admin:write"]),
+    current_user=Security(get_current_user, scopes=["address_type:delete"]),
 ):
     result = await profile.DELETE_ADDRESS_TYPE(db=db, type_id=type_id)
     return result
@@ -184,11 +196,14 @@ async def delete_address_type(
 async def add_family_member(
     family_member_data: FamilyMemberCreate = Body(...),
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["customer:write"]),
+    current_user: User = Security(get_current_user, scopes=["members:write"]),
 ):
     """Add a new family member for the logged-in user."""
     result = await profile.ADD_FAMILY_MEMBER(
-        db=db, user_id=current_user.user_id, data=family_member_data
+        db=db,
+        user_id=current_user.user_id,
+        data=family_member_data,
+        role_id=current_user.role_id,
     )
     return result
 
@@ -199,7 +214,7 @@ async def add_family_member(
 )
 async def get_family_members(
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["customer:read"]),
+    current_user: User = Security(get_current_user, scopes=["members:read"]),
 ):
     """Get all family members of a specific user."""
     result = await profile.GET_FAMILY_MEMBERS(db=db, user_id=current_user.user_id)
@@ -214,21 +229,10 @@ async def update_family_member(
     member_id: int = Path(...),
     family_member_data: FamilyMemberUpdate = Body(...),
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["customer:write"]),
+    current_user: User = Security(get_current_user, scopes=["members:write"]),
 ):
     """Update a specific family member."""
     result = await profile.UPDATE_FAMILY_MEMBER(
         db=db, member_id=member_id, data=family_member_data
     )
     return result
-
-
-#
-# @router.delete("/{member_id}", description="Delete a family member by ID")
-# async def delete_family_member(
-#     member_id: int = Path(...),
-#     db: AsyncSession = Depends(get_postgres),
-#     current_user: User = Security(get_current_user, scopes=["admin:write"]),
-# ):
-#     """Delete a family member from database."""
-#     return await family_service.delete_family_member(db=db, member_id=member_id)

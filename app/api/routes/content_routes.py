@@ -1,7 +1,7 @@
 import json
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Security, UploadFile
 from fastapi.responses import StreamingResponse
 from motor.motor_asyncio import AsyncIOMotorClient
 
@@ -47,7 +47,7 @@ def get_content_service(
 async def create_hero_section(
     data: HeroSectionCreate,
     service: ContentService = Depends(get_content_service),
-    current_user=Depends(get_current_user),  # Admin only
+    current_user=Security(get_current_user, scopes=["content:write"]),  # Admin only
 ):
     """Create hero section (Admin only)"""
     hero_data = data.dict()
@@ -76,7 +76,7 @@ async def update_hero_section(
     hero_id: str,
     data: HeroSectionUpdate,
     service: ContentService = Depends(get_content_service),
-    current_user=Depends(get_current_user),
+    current_user=Security(get_current_user, scopes=["content:write"]),
 ):
     """Update hero section (Admin only)"""
     update_data = {k: v for k, v in data.dict().items() if v is not None}
@@ -93,7 +93,7 @@ async def upload_hero_image(
     image_num: int,
     file: UploadFile = File(...),
     service: ContentService = Depends(get_content_service),
-    current_user=Depends(get_current_user),
+    current_user=Security(get_current_user, scopes=["content:write"]),
 ):
     """Upload hero section image (Admin only). image_num should be 1 or 2"""
     if image_num not in [1, 2]:
@@ -116,7 +116,7 @@ async def create_banner(
     link: Optional[str] = Form(None),
     order: int = Form(0),
     service: ContentService = Depends(get_content_service),
-    current_user=Depends(get_current_user),
+    current_user=Security(get_current_user, scopes=["content:write"]),
 ):
     """Create banner (Admin only) - Max 5 active banners"""
     if not file.content_type.startswith("image/"):
@@ -150,7 +150,7 @@ async def update_banner(
     banner_id: str,
     data: BannerUpdate,
     service: ContentService = Depends(get_content_service),
-    current_user=Depends(get_current_user),
+    current_user=Security(get_current_user, scopes=["content:write"]),
 ):
     """Update banner (Admin only)"""
     update_data = {k: v for k, v in data.dict().items() if v is not None}
@@ -161,7 +161,7 @@ async def update_banner(
 async def delete_banner(
     banner_id: str,
     service: ContentService = Depends(get_content_service),
-    current_user=Depends(get_current_user),
+    current_user=Security(get_current_user, scopes=["content:write"]),
 ):
     """Delete banner (Admin only)"""
     await service.delete_banner(banner_id)
@@ -176,7 +176,7 @@ async def delete_banner(
 async def create_feature(
     data: BestFeatureCreate,
     service: ContentService = Depends(get_content_service),
-    current_user=Depends(get_current_user),
+    current_user=Security(get_current_user, scopes=["content:write"]),
 ):
     """Create best feature (Admin only)"""
     feature_data = data.dict()
@@ -203,7 +203,7 @@ async def update_feature(
     feature_id: str,
     data: BestFeatureUpdate,
     service: ContentService = Depends(get_content_service),
-    current_user=Depends(get_current_user),
+    current_user=Security(get_current_user, scopes=["content:write"]),
 ):
     """Update feature (Admin only)"""
     update_data = {k: v for k, v in data.dict().items() if v is not None}
@@ -214,7 +214,7 @@ async def update_feature(
 async def delete_feature(
     feature_id: str,
     service: ContentService = Depends(get_content_service),
-    current_user=Depends(get_current_user),
+    current_user=Security(get_current_user, scopes=["content:write"]),
 ):
     """Delete feature (Admin only)"""
     await service.delete_feature(feature_id)
@@ -233,7 +233,7 @@ async def create_category(
     order: int = Form(0),
     file: Optional[UploadFile] = File(None),
     service: ContentService = Depends(get_content_service),
-    current_user=Depends(get_current_user),
+    current_user=Security(get_current_user, scopes=["content:write"]),
 ):
     """Create category (Admin only)"""
     if file and not file.content_type.startswith("image/"):
@@ -273,7 +273,7 @@ async def update_category(
     is_active: Optional[bool] = Form(None),
     file: Optional[UploadFile] = File(None),
     service: ContentService = Depends(get_content_service),
-    current_user=Depends(get_current_user),
+    current_user=Security(get_current_user, scopes=["content:write"]),
 ):
     """Update category (Admin only)"""
     if file and not file.content_type.startswith("image/"):
@@ -298,7 +298,7 @@ async def update_category(
 async def delete_category(
     category_id: str,
     service: ContentService = Depends(get_content_service),
-    current_user=Depends(get_current_user),
+    current_user=Security(get_current_user, scopes=["content:write"]),
 ):
     """Delete category (Admin only)"""
     await service.delete_category(category_id)
@@ -313,7 +313,7 @@ async def delete_category(
 async def create_promise(
     data: PromiseCreate,
     service: ContentService = Depends(get_content_service),
-    current_user=Depends(get_current_user),
+    current_user=Security(get_current_user, scopes=["content:write"]),
 ):
     """Create promise (Admin only)"""
     promise_data = data.dict()
@@ -340,7 +340,7 @@ async def update_promise(
     promise_id: str,
     data: PromiseUpdate,
     service: ContentService = Depends(get_content_service),
-    current_user=Depends(get_current_user),
+    current_user=Security(get_current_user, scopes=["content:write"]),
 ):
     """Update promise (Admin only)"""
     update_data = {k: v for k, v in data.dict().items() if v is not None}
@@ -351,7 +351,7 @@ async def update_promise(
 async def delete_promise(
     promise_id: str,
     service: ContentService = Depends(get_content_service),
-    current_user=Depends(get_current_user),
+    current_user=Security(get_current_user, scopes=["content:write"]),
 ):
     """Delete promise (Admin only)"""
     await service.delete_promise(promise_id)
@@ -366,7 +366,7 @@ async def delete_promise(
 async def create_policy(
     data: PolicyCreate,
     service: ContentService = Depends(get_content_service),
-    current_user=Depends(get_current_user),
+    current_user=Security(get_current_user, scopes=["content:write"]),
 ):
     """Create policy (Admin only)"""
     policy_data = data.dict()
@@ -405,7 +405,7 @@ async def update_policy(
     policy_id: str,
     data: PolicyUpdate,
     service: ContentService = Depends(get_content_service),
-    current_user=Depends(get_current_user),
+    current_user=Security(get_current_user, scopes=["content:write"]),
 ):
     """Update policy (Admin only)"""
     update_data = {k: v for k, v in data.dict().items() if v is not None}
@@ -416,7 +416,7 @@ async def update_policy(
 async def delete_policy(
     policy_id: str,
     service: ContentService = Depends(get_content_service),
-    current_user=Depends(get_current_user),
+    current_user=Security(get_current_user, scopes=["content:write"]),
 ):
     """Delete policy (Admin only)"""
     await service.delete_policy(policy_id)

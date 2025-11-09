@@ -28,9 +28,11 @@ class ProfileService:
         pass
 
     async def GET_ADMIN_PROFILE(
-        self, admin_id: int, db: AsyncSession
+        self, admin_id: int, db: AsyncSession, role_id: int
     ) -> ManagementProfile:
         try:
+            if role_id == 1:
+                raise HTTPException(status_code=403, detail="Forbidden Access")
             result = await db.execute(
                 select(ManagementProfile).filter(ManagementProfile.user_id == admin_id)
             )
@@ -49,9 +51,15 @@ class ProfileService:
             )
 
     async def UPDATE_ADMIN_PROFILE(
-        self, admin_id: int, db: AsyncSession, profile_data: AdminProfileCreate
+        self,
+        admin_id: int,
+        db: AsyncSession,
+        profile_data: AdminProfileCreate,
+        role_id: int,
     ) -> ManagementProfile:
         try:
+            if role_id == 1:
+                raise HTTPException(status_code=403, detail="Forbidden Access")
             result = await db.execute(
                 select(ManagementProfile).filter(ManagementProfile.user_id == admin_id)
             )
@@ -87,9 +95,11 @@ class ProfileService:
             )
 
     async def GET_CUSTOMER_PROFILE(
-        self, db: AsyncSession, customer_id: int
+        self, db: AsyncSession, customer_id: int, role_id: int
     ) -> CustomerProfile:
         try:
+            if role_id != 1:
+                raise HTTPException(status_code=403, detail="Forbidden Access")
             result = await db.execute(
                 select(CustomerProfile).filter(CustomerProfile.user_id == customer_id)
             )
@@ -108,10 +118,16 @@ class ProfileService:
                 status_code=500, detail="internal server error : [get-customer-profile]"
             )
 
-    async def update_customer_profile(
-        self, db: AsyncSession, customer_id: int, profile_data: CustomerProfileCreate
+    async def UPDATE_CUSTOMER_PROFILE(
+        self,
+        db: AsyncSession,
+        customer_id: int,
+        profile_data: CustomerProfileCreate,
+        role_id: int,
     ) -> CustomerProfile:
         try:
+            if role_id != 1:
+                raise HTTPException(status_code=403, detail="Forbidden Access")
             result = await db.execute(
                 select(CustomerProfile).filter(CustomerProfile.user_id == customer_id)
             )
@@ -119,6 +135,8 @@ class ProfileService:
             if profile_obj is not None:
                 if profile_data.name is not None:
                     profile_obj.name = profile_data.name
+                if profile_data.email is not None:
+                    profile_obj.email = profile_data.email
                 if profile_data.address_id is not None:
                     profile_obj.address_id = profile_data.address_id
                 if profile_data.profile_pic is not None:
@@ -156,9 +174,11 @@ class ProfileService:
             )
 
     async def GET_CUSTOMER_ADDRESSES(
-        self, customer_id: int, db: AsyncSession
+        self, customer_id: int, db: AsyncSession, role_id: int
     ) -> Sequence[Address]:
         try:
+            if role_id != 1:
+                raise HTTPException(status_code=403, detail="Forbidden Access")
             result = await db.execute(
                 select(Address).filter(
                     Address.user_id == customer_id, Address.is_deleted == False
@@ -219,11 +239,14 @@ class ProfileService:
     async def ADD_ADDRESS(
         self,
         customer_id: int,
+        role_id: int,
         db: AsyncSession,
         longitude: float,
         latitude: float,
         type_id: int = 1,
     ):
+        if role_id != 1:
+            raise HTTPException(status_code=403, detail="Forbidden Access")
         geo_result = await self._reverse_geocode(lat=latitude, lon=longitude)
         address_data = geo_result.get("address", {}) if geo_result else {}
         result = await db.execute(
@@ -319,10 +342,12 @@ class ProfileService:
         return {"message": f"Address type '{addr_type.name}' deleted successfully"}
 
     async def ADD_FAMILY_MEMBER(
-        self, db: AsyncSession, user_id: int, data: FamilyMemberCreate
+        self, db: AsyncSession, user_id: int, data: FamilyMemberCreate, role_id: int
     ) -> FamilyMember:
         """Add a new family member for a user."""
         try:
+            if role_id != 1:
+                raise HTTPException(status_code=403, detail="Forbidden Access")
             new_member = FamilyMember(
                 user_id=user_id,
                 name=data.name,

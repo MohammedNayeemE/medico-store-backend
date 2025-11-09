@@ -84,8 +84,10 @@ async def onboard_employee(
 async def admin_logout(
     request: Request,
     db: AsyncSession = Depends(get_postgres),
-    current_user=Security(get_current_user, scopes=["admin:write"]),
+    current_user: User = Security(get_current_user, scopes=["auth:write"]),
 ):
+    if current_user.role_id == 1:
+        raise HTTPException(status_code=403, detail="Forbidden Access")
     access_token = request.cookies.get("access_token")
     if not access_token:
         raise HTTPException(status_code=404, detail="access_token not found")
@@ -127,7 +129,7 @@ async def reset_password(
 async def logout_all(
     request: Request,
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["admin:write"]),
+    current_user: User = Security(get_current_user, scopes=["auth:write"]),
 ):
     access_token = request.cookies.get("access_token")
     result = await auth.LOGOUT_ALL(
@@ -150,22 +152,11 @@ async def user_login(
     return result
 
 
-#
-# @router.post("/user-logout", description="Logout user and revoke the access token")
-# async def user_logout(
-#     token: str = Depends(oauth2_scheme),
-#     db: AsyncSession = Depends(get_postgres),
-#     current_user=Security(get_current_user, scopes=["customer:write"]),
-# ):
-#     result = await auth.LOGOUT_USER(token=token, db=db)
-#     return result
-
-
 @router.post("/refresh")
 async def refresh_token(
     request: Request,
     db: AsyncSession = Depends(get_postgres),
-    current_user=Security(get_current_user, scopes=["customer:write"]),
+    current_user=Security(get_current_user, scopes=["auth:write"]),
 ):
     result = await auth.REFRESH_TOKEN(db=db, request=request)
     return result

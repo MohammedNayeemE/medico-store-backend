@@ -14,7 +14,7 @@ inventory_manager = InventoryManagementService()
 @router.post("/", description="Create a medicine batch entry")
 async def create_batch(
     background_tasks: BackgroundTasks,
-    current_user=Security(get_current_user, scopes=["admin:write"]),
+    current_user=Security(get_current_user, scopes=["batch:write"]),
     db: AsyncSession = Depends(get_postgres),
     batch_data: MedicineBatchCreate = Body(...),
 ):
@@ -28,7 +28,7 @@ async def create_batch(
     "/", description="List medicine batches filtered by medicine and pagination"
 )
 async def list_all_batches(
-    current_user=Security(get_current_user, scopes=["admin:read"]),
+    current_user=Security(get_current_user, scopes=["batch:read"]),
     db: AsyncSession = Depends(get_postgres),
     skip: int = Query(0, ge=0),
     limit: int = Query(10, le=100),
@@ -43,7 +43,7 @@ async def list_all_batches(
 @router.get("/{batch_id}", description="Get batch details by ID")
 async def get_batch_by_id(
     batch_id: int = Path(...),
-    current_user=Security(get_current_user, scopes=["admin:read"]),
+    current_user=Security(get_current_user, scopes=["batch:read"]),
     db: AsyncSession = Depends(get_postgres),
 ):
     result = await inventory_manager.GET_BATCH_BY_ID(db=db, batch_id=batch_id)
@@ -53,7 +53,7 @@ async def get_batch_by_id(
 @router.put("/{batch_id}", description="Update a batch by ID")
 async def update_batch(
     batch_id: int = Path(...),
-    current_user=Security(get_current_user, scopes=["admin:write"]),
+    current_user=Security(get_current_user, scopes=["batch:write"]),
     db: AsyncSession = Depends(get_postgres),
     batch_data: MedicineBatchCreate = Body(...),
 ):
@@ -66,7 +66,7 @@ async def update_batch(
 @router.delete("/{batch_id}", description="Soft delete a batch by ID")
 async def soft_delete_batch(
     batch_id: int = Path(...),
-    current_user: User = Security(get_current_user, scopes=["admin:write"]),
+    current_user: User = Security(get_current_user, scopes=["batch:delete"]),
     db: AsyncSession = Depends(get_postgres),
 ):
     result = await inventory_manager.SOFT_DELETE_BATCH(
@@ -80,7 +80,7 @@ async def get_low_stock_items(
     threshold: int = Query(10, ge=1),
     skip: int = Query(0, ge=0),
     limit: int = Query(10, le=100),
-    current_user=Security(get_current_user, scopes=["admin:read"]),
+    current_user=Security(get_current_user, scopes=["batch:read"]),
     db: AsyncSession = Depends(get_postgres),
 ):
     return await inventory_manager.GET_LOW_STOCK_ITEMS(db, threshold, skip, limit)
@@ -90,7 +90,7 @@ async def get_low_stock_items(
 async def get_expired_batches(
     skip: int = Query(0, ge=0),
     limit: int = Query(10, le=100),
-    current_user=Security(get_current_user, scopes=["admin:read"]),
+    current_user=Security(get_current_user, scopes=["batch:read"]),
     db: AsyncSession = Depends(get_postgres),
 ):
     return await inventory_manager.GET_EXPIRED_BATCHES(db, skip, limit)
@@ -101,7 +101,7 @@ async def get_expiring_soon(
     days: int = Query(30, ge=1),
     skip: int = Query(0, ge=0),
     limit: int = Query(10, le=100),
-    current_user=Security(get_current_user, scopes=["admin:read"]),
+    current_user=Security(get_current_user, scopes=["batch:read"]),
     db: AsyncSession = Depends(get_postgres),
 ):
     return await inventory_manager.GET_EXPIRING_SOON(db, days, skip, limit)
@@ -111,7 +111,7 @@ async def get_expiring_soon(
 async def get_stock_summary(
     skip: int = Query(0, ge=0),
     limit: int = Query(10, le=100),
-    current_user=Security(get_current_user, scopes=["admin:read"]),
+    current_user=Security(get_current_user, scopes=["batch:read"]),
     db: AsyncSession = Depends(get_postgres),
 ):
     return await inventory_manager.GET_STOCK_SUMMARY(db, skip, limit)

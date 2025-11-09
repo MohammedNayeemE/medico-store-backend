@@ -19,7 +19,7 @@ inventory_manager = InventoryManagementService()
     description="Upload a single medicine image",
 )
 async def upload_thumbnail_image(
-    current_user: User = Security(get_current_user, scopes=["admin:write"]),
+    current_user: User = Security(get_current_user, scopes=["medicine:write"]),
     db: AsyncSession = Depends(get_postgres),
     file: UploadFile = File(...),
     medicine_id: int = Path(...),
@@ -39,7 +39,7 @@ async def upload_thumbnail_image(
     description="Upload Multiple Images for the medicine",
 )
 async def upload_mulitple_images(
-    current_user: User = Security(get_current_user, scopes=["admin:write"]),
+    current_user: User = Security(get_current_user, scopes=["medicine:write"]),
     db: AsyncSession = Depends(get_postgres),
     files: List[UploadFile] = File(...),
     medicine_id: int = Path(...),
@@ -62,7 +62,7 @@ async def download_template():
 
 @router.post("/create", description="Create a new medicine entry")
 async def create_medicine(
-    current_user=Security(get_current_user, scopes=["admin:write"]),
+    current_user=Security(get_current_user, scopes=["medicine:write"]),
     db: AsyncSession = Depends(get_postgres),
     medicine_data: MedicineCreate = Body(...),
 ):
@@ -72,7 +72,7 @@ async def create_medicine(
 
 @router.post("/bulk-upload-medicines", description="Bulk upload the medicine data")
 async def bulk_upload_medicine(
-    current_user=Security(get_current_user, scopes=["admin:write"]),
+    current_user=Security(get_current_user, scopes=["medicine:write"]),
     db: AsyncSession = Depends(get_postgres),
     medicine_data: UploadFile = File(...),
 ):
@@ -126,7 +126,7 @@ async def get_all_light_medicines(
 @router.get("/{medicine_id}", description="Get details of a specific medicine by ID")
 async def get_medicine_details(
     medicine_id: int = Path(...),
-    current_user=Security(get_current_user, scopes=["admin:read"]),
+    current_user=Security(get_current_user, scopes=["medicine:write"]),
     db: AsyncSession = Depends(get_postgres),
 ):
     result = await inventory_manager.GET_MEDICINE_BY_ID(db=db, medicine_id=medicine_id)
@@ -136,7 +136,7 @@ async def get_medicine_details(
 @router.put("/{medicine_id}", description="Update an existing medicine by ID")
 async def update_medicine(
     medicine_id: int = Path(...),
-    current_user=Security(get_current_user, scopes=["admin:write"]),
+    current_user=Security(get_current_user, scopes=["medicine:write"]),
     db: AsyncSession = Depends(get_postgres),
     medicine_data: MedicineCreate = Body(...),
 ):
@@ -149,7 +149,7 @@ async def update_medicine(
 @router.delete("/{medicine_id}", description="Soft delete a medicine by ID")
 async def soft_delete_medicine(
     medicine_id: int = Path(...),
-    current_user: User = Security(get_current_user, scopes=["admin:write"]),
+    current_user: User = Security(get_current_user, scopes=["medicine:write"]),
     db: AsyncSession = Depends(get_postgres),
 ):
     result = await inventory_manager.SOFT_DELETE_MEDICINE(

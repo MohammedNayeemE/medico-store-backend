@@ -61,8 +61,11 @@ class OrderService:
         customer_id: int,
         db: AsyncSession,
         bucket: AsyncIOMotorGridFSBucket,
+        role_id: int,
     ):
         try:
+            if role_id != 1:
+                raise HTTPException(status_code=403, detail="Forbidden Access")
             if file.content_type not in self.ALLOWED_CONTENT_TYPES:
                 raise HTTPException(
                     status_code=400,
@@ -104,12 +107,15 @@ class OrderService:
 
     async def GET_CUSTOMER_PRESCRIPTIONS(
         self,
+        role_id: int,
         db: AsyncSession,
         customer_id: int,
         skip: int = 0,
         limit: int = 10,
     ):
         try:
+            if role_id != 1:
+                raise HTTPException(status_code=403, detail="Forbidden Access")
             result = await db.execute(
                 select(User).filter(
                     User.user_id == customer_id, User.is_deleted == False
@@ -206,12 +212,15 @@ class OrderService:
     async def VERIFY_PRESCRIPTION(
         self,
         db: AsyncSession,
+        role_id: int,
         prescription_id: int,
         is_verified: bool,
         verified_by: int,
         notes: str | None = None,
     ):
         try:
+            if role_id == 1:
+                raise HTTPException(status_code=403, detail="Forbidden Access")
             result = await db.execute(
                 select(Prescription).where(
                     Prescription.prescription_id == prescription_id,
@@ -1096,9 +1105,16 @@ class OrderService:
             )
 
     async def GET_CUSTOMER_ORDERS(
-        self, db: AsyncSession, customer_id: int, skip: int = 0, limit: int = 10
+        self,
+        db: AsyncSession,
+        customer_id: int,
+        role_id: int,
+        skip: int = 0,
+        limit: int = 10,
     ):
         try:
+            if role_id != 1:
+                raise HTTPException(status_code=403, detail="Forbidden Access")
             result = await db.execute(
                 select(Order)
                 .options(

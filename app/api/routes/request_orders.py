@@ -38,7 +38,7 @@ order_manager = OrderService()
 async def create_request_order(
     request_data: RequestOrderCreate = Body(...),
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["customer:write"]),
+    current_user: User = Security(get_current_user, scopes=["request_order:write"]),
 ):
     result = await order_manager.CREATE_REQUEST_ORDER(
         db=db, current_user=current_user, request_data=request_data
@@ -51,7 +51,7 @@ async def get_my_request_orders(
     skip: int = Query(0, ge=0),
     limit: int = Query(10, le=50),
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["customer:read"]),
+    current_user: User = Security(get_current_user, scopes=["request_order:read"]),
 ):
     result = await order_manager.GET_MY_REQUEST_ORDERS(
         db=db, current_user=current_user, skip=skip, limit=limit
@@ -65,7 +65,9 @@ async def get_my_request_orders(
 )
 async def admin_get_all_request_orders(
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["admin:read"]),
+    current_user: User = Security(
+        get_current_user, scopes=["request_order_admin:read"]
+    ),
     status: RequestOrderStatusEnum | None = Query(None),
     customer_id: int | None = Query(None),
     prescription_id: int | None = Query(None),
@@ -99,7 +101,7 @@ async def admin_get_all_request_orders(
 async def get_request_order_details(
     request_order_id: int = Path(...),
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["customer:read"]),
+    current_user: User = Security(get_current_user, scopes=["request_order:read"]),
 ):
     result = await order_manager.GET_REQUEST_ORDER_DETAILS(
         db=db,
@@ -114,7 +116,7 @@ async def get_request_order_details(
 async def cancel_request_order(
     request_order_id: int = Path(...),
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["customer:write"]),
+    current_user: User = Security(get_current_user, scopes=["request_order:write"]),
 ):
     result = await order_manager.CANCEL_REQUEST_ORDER(
         db=db, request_order_id=request_order_id, user_id=current_user.user_id
@@ -133,7 +135,9 @@ async def change_status_of_request_order(
     request_order_id: int = Path(...),
     status: RequestOrderStatusEnum = Query(...),
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["admin:write"]),
+    current_user: User = Security(
+        get_current_user, scopes=["request_order_admin:update"]
+    ),
     reason: RequestOrderApprove = Body(...),
 ):
     if status == RequestOrderStatusEnum.approved.value:
@@ -162,7 +166,9 @@ async def notify_payment(
     background_tasks: BackgroundTasks,
     request_order_id: int = Path(...),
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["admin:write"]),
+    current_user: User = Security(
+        get_current_user, scopes=["request_order_admin:update"]
+    ),
 ):
     result = await order_manager.SEND_PAYMENT_NOTIFICATION(
         db=db,
@@ -198,7 +204,9 @@ async def modify_request_order_items(
         ..., description="List of item modifications"
     ),
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["admin:write"]),
+    current_user: User = Security(
+        get_current_user, scopes=["request_order_admin:update"]
+    ),
 ):
     result = await order_manager.MODIFY_REQUEST_ORDER_ITEMS(
         db=db,

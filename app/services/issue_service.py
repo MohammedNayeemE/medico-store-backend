@@ -36,8 +36,10 @@ class IssueService:
 
     # ==================== ISSUE CATEGORIES ==================== #
 
-    async def LIST_ISSUE_CATEGORIES(self, db: AsyncSession):
+    async def LIST_ISSUE_CATEGORIES(self, db: AsyncSession, role_id: int):
         try:
+            if role_id == 1:
+                raise HTTPException(status_code=403, detail="Forbidden Acess")
             result = await db.execute(
                 select(IssueCategory).filter(IssueCategory.is_deleted == False)
             )
@@ -47,9 +49,11 @@ class IssueService:
             raise HTTPException(status_code=500, detail="Internal Server Error")
 
     async def CREATE_ISSUE_CATEGORY(
-        self, db: AsyncSession, category_data: IssueCategoryCreate, admin_id: int
+        self, db: AsyncSession, category_data: IssueCategoryCreate, role_id: int
     ):
         try:
+            if role_id == 1:
+                raise HTTPException(status_code=403, detail="Forbidden Access")
             new_category = IssueCategory(
                 name=category_data.name, description=category_data.description
             )
@@ -63,9 +67,15 @@ class IssueService:
             raise HTTPException(status_code=500, detail="Internal Server Error")
 
     async def UPDATE_ISSUE_CATEGORY(
-        self, db: AsyncSession, category_id: int, category_data: IssueCategoryUpdate
+        self,
+        db: AsyncSession,
+        category_id: int,
+        category_data: IssueCategoryUpdate,
+        role_id: int,
     ):
         try:
+            if role_id == 1:
+                raise HTTPException(status_code=403, detail="Forbidden Access")
             result = await db.execute(
                 select(IssueCategory).filter(IssueCategory.category_id == category_id)
             )
@@ -86,9 +96,11 @@ class IssueService:
             raise HTTPException(status_code=500, detail="Internal Server Error")
 
     async def SOFT_DELETE_ISSUE_CATEGORY(
-        self, db: AsyncSession, category_id: int, admin_id: int
+        self, db: AsyncSession, category_id: int, admin_id: int, role_id: int
     ):
         try:
+            if role_id == 1:
+                raise HTTPException(status_code=403, detail="Forbidden Access")
             result = await db.execute(
                 select(IssueCategory).filter(IssueCategory.category_id == category_id)
             )
@@ -110,9 +122,11 @@ class IssueService:
     # ==================== ISSUES ==================== #
 
     async def CREATE_ISSUE(
-        self, db: AsyncSession, customer_id: int, issue_data: IssueCreate
+        self, db: AsyncSession, customer_id: int, issue_data: IssueCreate, role_id: int
     ):
         try:
+            if role_id != 1:
+                raise HTTPException(status_code=403, detail="Forbidden Access")
             if issue_data.request_order_id:
                 result = await db.execute(
                     select(RequestOrder).filter(
@@ -186,9 +200,11 @@ class IssueService:
             raise HTTPException(status_code=500, detail="Internal Server Error")
 
     async def UPDATE_ISSUE_STATUS(
-        self, db: AsyncSession, issue_id: int, status: IssueStatusEnum
+        self, db: AsyncSession, issue_id: int, status: IssueStatusEnum, role_id: int
     ):
         try:
+            if role_id == 1:
+                raise HTTPException(status_code=403, detail="Forbidden Access")
             result = await db.execute(select(Issue).filter(Issue.issue_id == issue_id))
             issue_obj = result.scalar_one_or_none()
             if not issue_obj:
@@ -206,8 +222,12 @@ class IssueService:
             print(f"[UPDATE_ISSUE_STATUS] Error: {e}")
             raise HTTPException(status_code=500, detail="Internal Server Error")
 
-    async def ASSIGN_ISSUE(self, db: AsyncSession, issue_id: int, assigned_to: int):
+    async def ASSIGN_ISSUE(
+        self, db: AsyncSession, issue_id: int, assigned_to: int, role_id: int
+    ):
         try:
+            if role_id == 1:
+                raise HTTPException(status_code=403, detail="Forbidden Access")
             result = await db.execute(select(Issue).filter(Issue.issue_id == issue_id))
             issue_obj = result.scalar_one_or_none()
             if not issue_obj:

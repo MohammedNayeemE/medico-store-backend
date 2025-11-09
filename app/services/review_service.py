@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import List
 
+from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
@@ -23,10 +24,13 @@ class ReviewService:
         self,
         db: AsyncSession,
         user_id: int,
+        role_id: int,
         medicine_id: int,
         review_data: ReviewCreate,
     ):
         try:
+            if role_id != 1:
+                raise HTTPException(status_code=403, detail="Forbidden Access")
             medicine_q = await db.execute(
                 select(Medicine).filter(
                     Medicine.medicine_id == medicine_id,
@@ -141,11 +145,10 @@ class ReviewService:
                 "internal server error : [GET_REVIEW_BY_ID]"
             )
 
-    # -----------------------------------------------------------
-    # GET REVIEWS BY USER
-    # -----------------------------------------------------------
-    async def GET_REVIEWS_BY_USER(self, db: AsyncSession, user_id: int):
+    async def GET_REVIEWS_BY_USER(self, db: AsyncSession, user_id: int, role_id: int):
         try:
+            if role_id == 1:
+                raise HTTPException(status_code=404, detail="Forbidden Access")
             reviews_q = await db.execute(
                 select(Review).filter(
                     Review.customer_id == user_id,
@@ -168,8 +171,12 @@ class ReviewService:
     # -----------------------------------------------------------
     # DELETE REVIEW (ADMIN ONLY)
     # -----------------------------------------------------------
-    async def DELETE_REVIEW(self, db: AsyncSession, review_id: int, deleted_by: int):
+    async def DELETE_REVIEW(
+        self, db: AsyncSession, review_id: int, deleted_by: int, role_id: int
+    ):
         try:
+            if role_id == 1:
+                raise HTTPException(status_code=403, detail="Forbidden Access")
             review_q = await db.execute(
                 select(Review).filter(
                     Review.review_id == review_id,

@@ -23,9 +23,15 @@ class RequestMedicineService:
         self.mail_service = MailService()
 
     async def CREATE_MEDICINE_REQUEST(
-        self, db: AsyncSession, user_id: int, request_data: MedicineRequestCreate
+        self,
+        db: AsyncSession,
+        user_id: int,
+        role_id: int,
+        request_data: MedicineRequestCreate,
     ):
         try:
+            if role_id != 1:
+                raise HTTPException(status_code=403, detail="Forbidden Access")
             result = await db.execute(
                 select(Medicine).filter(
                     Medicine.medicine_id == request_data.requested_medicine_id,
@@ -59,9 +65,16 @@ class RequestMedicineService:
             )
 
     async def GET_USER_REQUESTS(
-        self, db: AsyncSession, user_id: int, skip: int = 0, limit: int = 10
+        self,
+        db: AsyncSession,
+        role_id: int,
+        user_id: int,
+        skip: int = 0,
+        limit: int = 10,
     ):
         try:
+            if role_id != 1:
+                raise HTTPException(status_code=403, detail="Forbidden Access")
             query = (
                 select(MedicineRequest)
                 .options(selectinload(MedicineRequest.requested_medicine))
@@ -143,8 +156,12 @@ class RequestMedicineService:
                 status_code=500, detail="Internal Server Error [SOFT_DELETE_REQUEST]"
             )
 
-    async def GET_ALL_REQUESTS(self, db: AsyncSession, skip: int = 0, limit: int = 20):
+    async def GET_ALL_REQUESTS(
+        self, db: AsyncSession, role_id: int, skip: int = 0, limit: int = 20
+    ):
         try:
+            if role_id == 1:
+                raise HTTPException(status_code=403, detail="Forbidden Access")
             query = (
                 select(MedicineRequest)
                 .options(
@@ -169,12 +186,15 @@ class RequestMedicineService:
     async def VERIFY_MEDICINE_REQUEST(
         self,
         db: AsyncSession,
+        role_id: int,
         request_id: int,
         admin_id: int,
         verify_data: MedicineRequestVerify,
         background_tasks: BackgroundTasks,
     ):
         try:
+            if role_id == 1:
+                raise HTTPException(status_code=403, detail="Forbidden Access")
             result = await db.execute(
                 select(MedicineRequest).filter(
                     MedicineRequest.request_id == request_id,

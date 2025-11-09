@@ -27,7 +27,7 @@ discount_manager = DiscountService()
 )
 async def list_discount_types(
     db: AsyncSession = Depends(get_postgres),
-    current_user=Security(get_current_user, scopes=["admin:read"]),
+    current_user=Security(get_current_user, scopes=["discount:read"]),
     skip: int = Query(0, ge=0),
     limit: int = Query(10, le=100),
 ):
@@ -39,7 +39,7 @@ async def list_discount_types(
 async def create_discount_type(
     discount_type: DiscountTypeCreate = Body(...),
     db: AsyncSession = Depends(get_postgres),
-    current_user=Security(get_current_user, scopes=["admin:write"]),
+    current_user=Security(get_current_user, scopes=["discount:write"]),
 ):
     result = await discount_manager.CREATE_DISCOUNT_TYPE(
         db=db, discount_type_data=discount_type
@@ -52,7 +52,7 @@ async def update_discount_type(
     id: int = Path(...),
     discount_type: DiscountTypeUpdate = Body(...),
     db: AsyncSession = Depends(get_postgres),
-    current_user=Security(get_current_user, scopes=["admin:write"]),
+    current_user=Security(get_current_user, scopes=["discount:write"]),
 ):
     result = await discount_manager.UPDATE_DISCOUNT_TYPE(
         db=db, discount_type_data=discount_type, id=id
@@ -64,7 +64,7 @@ async def update_discount_type(
 async def soft_delete_discount_type(
     id: int = Path(...),
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["admin:write"]),
+    current_user: User = Security(get_current_user, scopes=["discount:write"]),
 ):
     result = await discount_manager.SOFT_DELETE_DISCOUNT_TYPE(
         db=db, user_id=current_user.user_id, discount_type_id=id
@@ -79,7 +79,7 @@ async def soft_delete_discount_type(
 async def list_discounts(
     is_active: Optional[bool] = None,
     db: AsyncSession = Depends(get_postgres),
-    current_user=Security(get_current_user, scopes=["admin:read"]),
+    current_user=Security(get_current_user, scopes=["discount:read"]),
     skip: int = Query(0, ge=0),
     limit: int = Query(10, le=100),
 ):
@@ -93,7 +93,7 @@ async def list_discounts(
 async def create_discount(
     discount_data: DiscountCreate = Body(...),
     db: AsyncSession = Depends(get_postgres),
-    current_user=Security(get_current_user, scopes=["admin:write"]),
+    current_user=Security(get_current_user, scopes=["discount:write"]),
 ):
     result = await discount_manager.CREATE_DISCOUNT(db=db, discount_data=discount_data)
     return result
@@ -103,7 +103,7 @@ async def create_discount(
 async def get_discount_details(
     discount_id: int = Path(...),
     db: AsyncSession = Depends(get_postgres),
-    current_user=Security(get_current_user, scopes=["admin:read"]),
+    current_user=Security(get_current_user, scopes=["discount:read"]),
 ):
     result = await discount_manager.GET_DISCOUNT_DETAILS(db=db, discount_id=discount_id)
     return result
@@ -114,7 +114,7 @@ async def update_discount(
     discount_id: int = Path(...),
     discount: DiscountUpdate = Body(...),
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["admin:write"]),
+    current_user: User = Security(get_current_user, scopes=["discount:write"]),
 ):
     result = await discount_manager.UPDATE_DISCOUNT(
         db=db,
@@ -129,7 +129,7 @@ async def update_discount(
 async def soft_delete_discount(
     discount_id: int = Path(...),
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["admin:write"]),
+    current_user: User = Security(get_current_user, scopes=["discount:write"]),
 ):
     result = await discount_manager.SOFT_DELETE_DISCOUNT(
         db=db, discount_id=discount_id, user_id=current_user.user_id
@@ -146,7 +146,7 @@ async def soft_delete_discount(
 # async def get_discount_parameters(
 #     discount_id: int = Path(...),
 #     db: AsyncSession = Depends(get_postgres),
-#     current_user=Security(get_current_user, scopes=["admin:read"]),
+#     current_user=Security(get_current_user, scopes=["discount:read"]),
 # ):
 #     result = await discount_manager.GET_DISCOUNT_DETAILS(db=db, discount_id=discount_id)
 #     return result
@@ -157,7 +157,7 @@ async def soft_delete_discount(
 #     discount_id: int = Path(...),
 #     parameter_data: DiscountParameterCreate = Body(...),
 #     db: AsyncSession = Depends(get_postgres),
-#     current_user=Security(get_current_user, scopes=["admin:write"]),
+#     current_user=Security(get_current_user, scopes=["discount:write"]),
 # ):
 #     result = await discount_manager.ADD_PARAMETER(
 #         db=db, discount_id=discount_id, parameter_data=parameter_data
@@ -172,7 +172,7 @@ async def soft_delete_discount(
 # async def delete_discount_parameter(
 #     parameter_id: int = Path(...),
 #     db: AsyncSession = Depends(get_postgres),
-#     current_user: User = Security(get_current_user, scopes=["admin:write"]),
+#     current_user: User = Security(get_current_user, scopes=["discount:write"]),
 # ):
 #     result = await discount_manager.DELETE_PARAMETER(
 #         db=db, parameter_id=parameter_id, user_id=current_user.user_id
@@ -188,7 +188,7 @@ async def soft_delete_discount(
 #     parameter_id: int = Path(...),
 #     parameter_data: DiscountParameterCreate = Body(...),
 #     db: AsyncSession = Depends(get_postgres),
-#     current_user: User = Security(get_current_user, scopes=["admin:write"]),
+#     current_user: User = Security(get_current_user, scopes=["discount:write"]),
 # ):
 #     result = await discount_manager.UPDATE_PARAMETER(
 #         db=db,
@@ -206,7 +206,7 @@ async def soft_delete_discount(
 #     discount_id: int = Path(...),
 #     medicine_ids: List[int] = Body(...),
 #     db: AsyncSession = Depends(get_postgres),
-#     current_user=Security(get_current_user, scopes=["admin:write"]),
+#     current_user=Security(get_current_user, scopes=["discount:write"]),
 # ):
 #     result = await discount_manager.ASSIGN_DISCOUNT_MEDICINES(
 #         db=db, discount_id=discount_id, medicine_ids=medicine_ids
@@ -219,7 +219,7 @@ async def soft_delete_discount(
 #     discount_id: int = Path(...),
 #     category_ids: List[int] = Body(...),
 #     db: AsyncSession = Depends(get_postgres),
-#     current_user=Security(get_current_user, scopes=["admin:write"]),
+#     current_user=Security(get_current_user, scopes=["discount:write"]),
 # ):
 #     result = await discount_manager.ASSIGN_DISCOUNT_CATEGORIES(
 #         db=db, discount_id=discount_id, category_ids=category_ids
@@ -235,7 +235,7 @@ async def soft_delete_discount(
 #     discount_id: int = Path(...),
 #     medicine_id: int = Path(...),
 #     db: AsyncSession = Depends(get_postgres),
-#     current_user: User = Security(get_current_user, scopes=["admin:write"]),
+#     current_user: User = Security(get_current_user, scopes=["discount:write"]),
 # ):
 #     result = await discount_manager.REMOVE_DISCOUNT_MEDICINE(
 #         db=db,
@@ -254,7 +254,7 @@ async def soft_delete_discount(
 #     discount_id: int = Path(...),
 #     category_id: int = Path(...),
 #     db: AsyncSession = Depends(get_postgres),
-#     current_user: User = Security(get_current_user, scopes=["admin:write"]),
+#     current_user: User = Security(get_current_user, scopes=["discount:write"]),
 # ):
 #     result = await discount_manager.REMOVE_DISCOUNT_CATEGORY(
 #         db=db,
@@ -272,7 +272,7 @@ async def soft_delete_discount(
 async def create_coupon(
     coupon: CouponCreate = Body(...),
     db: AsyncSession = Depends(get_postgres),
-    current_user=Security(get_current_user, scopes=["admin:write"]),
+    current_user=Security(get_current_user, scopes=["discount:write"]),
 ):
     result = await discount_manager.CREATE_COUPON(db=db, data=coupon)
     return result
@@ -284,7 +284,7 @@ async def create_coupon(
 async def validate_coupon(
     code: str = Path(...),
     db: AsyncSession = Depends(get_postgres),
-    current_user=Security(get_current_user, scopes=["user:read"]),
+    current_user=Security(get_current_user, scopes=["coupon:read"]),
 ):
     result = await discount_manager.VALIDATE_COUPON(db=db, code=code)
     return result
@@ -295,7 +295,7 @@ async def increment_coupon_usage(
     coupon_id: int = Path(...),
     delta: int = Body(..., ge=1),
     db: AsyncSession = Depends(get_postgres),
-    current_user=Security(get_current_user, scopes=["user:write"]),
+    current_user=Security(get_current_user, scopes=["coupon:write"]),
 ):
     result = await discount_manager.INCREMENT_COUPON_USAGE(
         db=db, coupon_id=coupon_id, delta=delta
@@ -307,7 +307,7 @@ async def increment_coupon_usage(
 async def get_coupon_details(
     coupon_id: int = Path(...),
     db: AsyncSession = Depends(get_postgres),
-    current_user=Security(get_current_user, scopes=["user:read"]),
+    current_user=Security(get_current_user, scopes=["coupon:read"]),
 ):
     result = await discount_manager.GET_COUPON_DETAILS(db=db, coupon_id=coupon_id)
     return result
@@ -317,7 +317,7 @@ async def get_coupon_details(
 async def soft_delete_coupon(
     coupon_id: int = Path(...),
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["admin:write"]),
+    current_user: User = Security(get_current_user, scopes=["discount:delete"]),
 ):
     result = await discount_manager.SOFT_DELETE_COUPON(
         db=db, coupon_id=coupon_id, deleted_by=current_user.user_id

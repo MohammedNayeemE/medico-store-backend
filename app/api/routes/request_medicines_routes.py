@@ -18,24 +18,31 @@ rq_manager = RequestMedicineService()
 @router.post("/", description="Create a new medicine request")
 async def create_medicine_request(
     request_data: MedicineRequestCreate = Body(...),
-    current_user: User = Security(get_current_user, scopes=["admin:write"]),
+    current_user: User = Security(get_current_user, scopes=["request_medicine:write"]),
     db: AsyncSession = Depends(get_postgres),
 ):
     result = await rq_manager.CREATE_MEDICINE_REQUEST(
-        db=db, user_id=current_user.user_id, request_data=request_data
+        db=db,
+        user_id=current_user.user_id,
+        request_data=request_data,
+        role_id=current_user.role_id,
     )
     return result
 
 
 @router.get("/my", description="Get all medicine requests by the logged-in user")
 async def get_my_medicine_requests(
-    current_user: User = Security(get_current_user, scopes=["admin:read"]),
+    current_user: User = Security(get_current_user, scopes=["request_medicine:read"]),
     db: AsyncSession = Depends(get_postgres),
     skip: int = Query(0, ge=0),
     limit: int = Query(10, le=100),
 ):
     result = await rq_manager.GET_USER_REQUESTS(
-        db=db, user_id=current_user.user_id, skip=skip, limit=limit
+        db=db,
+        user_id=current_user.user_id,
+        skip=skip,
+        limit=limit,
+        role_id=current_user.role_id,
     )
     return result
 
@@ -43,19 +50,26 @@ async def get_my_medicine_requests(
 @router.get("/{request_id}", description="Get details of a specific medicine request")
 async def get_medicine_request_details(
     request_id: int = Path(...),
-    current_user: User = Security(get_current_user, scopes=["admin:read"]),
+    current_user: User = Security(get_current_user, scopes=["request_medicine:read"]),
     db: AsyncSession = Depends(get_postgres),
 ):
     result = await rq_manager.GET_REQUEST_DETAILS(
-        request_id=request_id, db=db, user_id=current_user.user_id
+        request_id=request_id,
+        db=db,
+        user_id=current_user.user_id,
+        role_id=current_user.role_id,
     )
     return result
 
 
-@router.delete("/{request_id}", description="Soft delete a specific medicine request")
+@router.delete(
+    "/{request_id}",
+    description="Soft delete a specific medicine request",
+    include_in_schema=False,
+)
 async def delete_medicine_request(
     request_id: int = Path(...),
-    current_user: User = Security(get_current_user, scopes=["admin:write"]),
+    current_user: User = Security(get_current_user, scopes=["request_medicine:write"]),
     db: AsyncSession = Depends(get_postgres),
 ):
     result = await rq_manager.SOFT_DELETE_REQUEST(
@@ -66,12 +80,14 @@ async def delete_medicine_request(
 
 @router.get("/admin/all", description="View all medicine requests in the system")
 async def get_all_medicine_requests(
-    current_user: User = Security(get_current_user, scopes=["admin:read"]),
+    current_user: User = Security(get_current_user, scopes=["request_medicine:read"]),
     db: AsyncSession = Depends(get_postgres),
     skip: int = Query(0, ge=0),
     limit: int = Query(20, le=100),
 ):
-    result = await rq_manager.GET_ALL_REQUESTS(db=db, skip=skip, limit=limit)
+    result = await rq_manager.GET_ALL_REQUESTS(
+        db=db, skip=skip, limit=limit, role_id=current_user.role_id
+    )
     return result
 
 
@@ -81,7 +97,7 @@ async def get_all_medicine_requests(
 async def verify_medicine_request(
     request_id: int = Path(...),
     verify_data: MedicineRequestVerify = Body(...),
-    current_user: User = Security(get_current_user, scopes=["admin:write"]),
+    current_user: User = Security(get_current_user, scopes=["request_medicine:write"]),
     db: AsyncSession = Depends(get_postgres),
     background_task=BackgroundTasks(),
 ):
@@ -91,5 +107,6 @@ async def verify_medicine_request(
         admin_id=current_user.user_id,
         verify_data=verify_data,
         background_tasks=background_task,
+        role_id=current_user.role_id,
     )
     return result

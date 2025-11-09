@@ -23,7 +23,7 @@ async def GET_NOTIFICATIONS(
 @router.get("/")
 async def GET_NOTIFICATIONS_USER(
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user),
+    current_user: User = Security(get_current_user, scopes=["notification:read"]),
 ):
     result = await notification_manager.GET_NOTFICATIONS_FOR_USER(
         db=db, user_id=current_user.user_id

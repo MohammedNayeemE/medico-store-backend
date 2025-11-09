@@ -24,13 +24,14 @@ async def initiate_payment(
     request_order_id: int = Body(...),
     method: str = Body(...),
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["customer:write"]),
+    current_user: User = Security(get_current_user, scopes=["payment:write"]),
 ):
     result = await payment_manager.INITIATE_PAYMENT(
         db=db,
         request_order_id=request_order_id,
         payment_mode=method,
         user_id=current_user.user_id,
+        role_id=current_user.role_id,
     )
     return result
 
@@ -42,7 +43,7 @@ async def initiate_payment(
 async def get_order_payments(
     order_id: int = Path(...),
     db: AsyncSession = Depends(get_postgres),
-    current_user=Security(get_current_user, scopes=["user:read"]),
+    current_user=Security(get_current_user, scopes=["payment:read"]),
 ):
     result = await payment_manager.GET_ORDER_PAYMENTS(db=db, order_id=order_id)
     return result
@@ -56,7 +57,7 @@ async def update_payment_status(
     payment_id: int = Path(...),
     status: PaymentStatusEnum = Body(...),
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["admin:write"]),
+    current_user: User = Security(get_current_user, scopes=["payment:update"]),
 ):
     result = await payment_manager.UPDATE_PAYMENT_STATUS(
         db=db, payment_id=payment_id, new_status=status
@@ -70,7 +71,7 @@ async def update_payment_status(
 )
 async def get_customer_payment_history(
     db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["admin:read"]),
+    current_user: User = Security(get_current_user, scopes=["payment:read"]),
 ):
     result = await payment_manager.GET_CUSTOMER_PAYMENTS(
         db=db, user_id=current_user.user_id
