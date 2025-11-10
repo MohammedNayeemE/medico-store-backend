@@ -57,9 +57,7 @@ async def list_all_side_effects(
     return result
 
 
-@router.get(
-    "/{side_effect_id}", description="Get side effect details by ID"
-)
+@router.get("/{side_effect_id}", description="Get side effect details by ID")
 async def get_side_effects_by_id(
     current_user=Security(get_current_user, scopes=["side_effect:read"]),
     db: AsyncSession = Depends(get_postgres),
@@ -84,9 +82,7 @@ async def update_side_effect(
     return result
 
 
-@router.delete(
-    "/{side_effect_id}", description="Soft delete a side effect by ID"
-)
+@router.delete("/{side_effect_id}", description="Soft delete a side effect by ID")
 async def soft_delete_side_effect(
     side_effect_id: int = Path(...),
     current_user: User = Security(get_current_user, scopes=["side_effect:write"]),
@@ -96,4 +92,3 @@ async def soft_delete_side_effect(
         db=db, side_effect_id=side_effect_id, deleted_by=current_user.user_id
     )
     return result
-

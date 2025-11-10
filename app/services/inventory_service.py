@@ -8,7 +8,7 @@ from operator import or_
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
-from fastapi import BackgroundTasks, File, HTTPException, UploadFile
+from fastapi import BackgroundTasks, Depends, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 from motor.motor_asyncio import AsyncIOMotorGridFSBucket
 from openpyxl import Workbook
@@ -18,6 +18,7 @@ from sqlalchemy import and_, asc, desc, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, joinedload, selectinload
 
+from app.api.dependecies.get_db_sessions import get_redis_client
 from app.core.database import async_session  # ✅ your async session factory
 from app.core.exceptions import (
     BadRequestException,
@@ -39,7 +40,7 @@ from app.models.inventory_management_models import (
     Tag,
 )
 from app.models.order_management_models import OrderItem, RequestOrderItem
-from app.models.user_management_models import FileAsset
+from app.models.user_management_models import FileAsset, User
 from app.schemas.inventory_schemas import (
     AlternativeCreate,
     CategoryCreate,
@@ -55,6 +56,9 @@ from app.schemas.inventory_schemas import (
 )
 from app.services.cache_service import CacheService
 from app.services.file_service import FileService
+from app.services.notification_service import NotificationService
+from app.schemas.notification_schemas import NotificationCreate
+from app.models.enums import NotificationType
 
 
 class InventoryManagementService:
@@ -63,7 +67,8 @@ class InventoryManagementService:
         self.ALLOWED_EXTENSIONS = {".csv", ".xlsx"}
         self.MAX_FILE_SIZE_MB = 10
         self.cache_service = CacheService()
-        self.BASE_FILE_URL = "http://localhost:8000/api/file_routes/assets/"
+        self.BASE_FILE_URL = "http://localhost:8000/api/v1/files/assets"
+        self.notification_service = NotificationService()
 
     async def _attempt_reallocation_for_medicine(self, medicine_id: int):
         """
@@ -183,7 +188,13 @@ class InventoryManagementService:
         new_medicine_image = MedicineImage(
             medicine_id=medicine_id, file_asset_id=asset_id
         )
-        db.add(asset_id)
+        db.add(new_medicine_image)
+        result = await db.execute(
+            select(Medicine).filter(Medicine.medicine_id == medicine_id)
+        )
+        medicine_obj = result.scalar_one_or_none()
+        if medicine_obj:
+            medicine_obj.image_asset_id = asset_id
         await db.commit()
         await db.refresh(new_medicine_image)
         return new_medicine_image
@@ -202,23 +213,27 @@ class InventoryManagementService:
             )
             medicine_obj = result.scalar_one_or_none()
             if not medicine_obj:
-                raise HTTPException(status_code=404, detail="medicine id not found")
+                raise HTTPException(status_code=404, detail="Medicine ID not found")
             asset_ids = await self.file_manager.UPLOAD_MULTIPLE_FILES(
                 bucket=bucket, files=files, db=db, user_id=user_id
             )
-            for items in asset_ids["data"]:
+            for item in asset_ids["data"]:
                 new_medicine_image = MedicineImage(
-                    medicine_id=medicine_id, file_asset_id=items["asset_id"]
+                    medicine_id=medicine_id,
+                    file_asset_id=int(item["asset_id"]),  # ✅ ensure integer
                 )
                 db.add(new_medicine_image)
             await db.commit()
-            return {"msg": "all the images are added"}
+            return {"msg": f"{len(asset_ids['data'])} images uploaded successfully"}
         except HTTPException:
             raise
         except Exception as e:
             print("--------------------------")
             print(f"[upload_medicine_images] : {e}")
-            raise HTTPException(status_code=500)
+            await db.rollback()
+            raise HTTPException(
+                status_code=500, detail="Internal server error while uploading images"
+            )
 
     async def DOWNLOAD_TEMPLATE(self):
         try:
@@ -341,8 +356,7 @@ class InventoryManagementService:
                     df = pd.read_excel(io.BytesIO(file_content))
             except Exception as e:
                 raise HTTPException(
-                    status_code=400,
-                    detail=f"Failed to parse the file: {str(e)}",
+                    status_code=400, detail=f"Failed to parse file: {str(e)}"
                 )
             required_columns = [
                 "medicine_name",
@@ -375,34 +389,84 @@ class InventoryManagementService:
                     await db.flush()
 
                     def safe_split(value):
-                        return [
-                            int(v.strip()) for v in str(value).split(",") if v.strip()
-                        ]
+                        return [v.strip() for v in str(value).split(",") if v.strip()]
 
-                    if pd.notna(row.get("category_ids")):
-                        for cat_id in safe_split(row["category_ids"]):
+                    if pd.notna(row.get("category_names")):
+                        for cat_name in safe_split(row["category_names"]):
+                            result = await db.execute(
+                                select(Category).filter(
+                                    Category.category_name == cat_name
+                                )
+                            )
+                            category = result.scalar_one_or_none()
+                            if not category:
+                                category = Category(category_name=cat_name)
+                                db.add(category)
+                                await db.flush()
                             db.add(
                                 MedicineCategory(
-                                    medicine_id=med.medicine_id, category_id=cat_id
+                                    medicine_id=med.medicine_id,
+                                    category_id=category.category_id,
                                 )
                             )
-                    if pd.notna(row.get("tags_ids")):
-                        for tag_id in safe_split(row["tags_ids"]):
-                            db.add(
-                                MedicineTag(medicine_id=med.medicine_id, tag_id=tag_id)
+                    if pd.notna(row.get("tag_names")):
+                        for tag_name in safe_split(row["tag_names"]):
+                            result = await db.execute(
+                                select(Tag).filter(Tag.name == tag_name)
                             )
-                    if pd.notna(row.get("alternative_ids")):
-                        for alt_id in safe_split(row["alternative_ids"]):
+                            tag = result.scalar_one_or_none()
+                            if not tag:
+                                tag = Tag(name=tag_name)
+                                db.add(tag)
+                                await db.flush()
                             db.add(
-                                MedicineAlternative(
-                                    medicine_id=med.medicine_id, alternative_id=alt_id
+                                MedicineTag(
+                                    medicine_id=med.medicine_id, tag_id=tag.tag_id
                                 )
                             )
-                    if pd.notna(row.get("side_effect_ids")):
-                        for sf_id in safe_split(row["side_effect_ids"]):
+                    if pd.notna(row.get("side_effect_names")):
+                        for sf_name in safe_split(row["side_effect_names"]):
+                            result = await db.execute(
+                                select(SideEffect).filter(
+                                    SideEffect.side_effect == sf_name
+                                )
+                            )
+                            side_effect = result.scalar_one_or_none()
+                            if not side_effect:
+                                side_effect = SideEffect(side_effect=sf_name)
+                                db.add(side_effect)
+                                await db.flush()
                             db.add(
                                 MedicineSideEffect(
-                                    medicine_id=med.medicine_id, side_effect_id=sf_id
+                                    medicine_id=med.medicine_id,
+                                    side_effect_id=side_effect.side_effect_id,
+                                )
+                            )
+                    if pd.notna(row.get("alternative_names")):
+                        for alt_name in safe_split(row["alternative_names"]):
+                            result = await db.execute(
+                                select(Medicine).filter(
+                                    Medicine.medicine_name == alt_name
+                                )
+                            )
+                            alt_med = result.scalar_one_or_none()
+                            if not alt_med:
+                                alt_med = Medicine(
+                                    medicine_name=alt_name,
+                                    generic_name="",
+                                    manufacturer="",
+                                    description="Auto-created alternative",
+                                    is_prescribed=False,
+                                    weight=0,
+                                    hsn_code="",
+                                )
+                                db.add(alt_med)
+                                await db.flush()
+                            db.add(
+                                MedicineAlternative(
+                                    medicine_id=med.medicine_id,
+                                    alternative_id=alt_med.medicine_id,
+                                    name=f"ALT{medicine_id,alternative_id}",
                                 )
                             )
                     inserted.append(row["medicine_name"])
@@ -516,13 +580,14 @@ class InventoryManagementService:
                 query = query.order_by(asc(Medicine.medicine_name))
             query = query.offset(skip).limit(limit)
             result = await db.execute(query)
-            rows = result.all()
+            rows = result.unique().all()
             response = [self._serialize_medicine(row) for row in rows]
             await self.cache_service.set_cache(cache_key, response)
             return response
         except HTTPException:
             raise
         except Exception as e:
+            print("=====================================")
             print(f"[GET_MEDICINES ERROR]: {e}")
             raise HTTPException(
                 status_code=500, detail="Internal server error: [get_medicines]"
@@ -580,7 +645,7 @@ class InventoryManagementService:
                 )
             )
             result = await db.execute(query)
-            medicine = result.scalar_one_or_none()
+            medicine = result.unique().scalar_one_or_none()
             if not medicine:
                 raise HTTPException(status_code=404, detail="Medicine not found")
             response = self._serialize_medicine_details(medicine)
@@ -589,6 +654,7 @@ class InventoryManagementService:
         except HTTPException:
             raise
         except Exception as e:
+            print("=========================")
             print(f"[GET_MEDICINE_DETAILS ERROR]: {e}")
             raise HTTPException(
                 status_code=500,
@@ -698,7 +764,7 @@ class InventoryManagementService:
             "weight": float(medicine.weight),
             "hsn_code": medicine.hsn_code,
             "image_urls": [
-                img.file_asset.file_url
+                f"{self.BASE_FILE_URL}/{img.file_asset.asset_id}"
                 for img in (medicine.images or [])
                 if getattr(img, "file_asset", None)
             ],
@@ -725,35 +791,39 @@ class InventoryManagementService:
             if cached_data:
                 print("cache-hit: [light_medicines]")
                 return cached_data
+
             Batch = aliased(MedicineBatch)
+
             batch_subq = (
                 select(Batch.medicine_id, Batch.selling_price)
                 .where(
                     Batch.medicine_id == Medicine.medicine_id,
                     Batch.is_deleted == False,
                 )
-                .order_by(Batch.expiry_date.asc())  # nearest expiry
+                .order_by(Batch.expiry_date.asc())
                 .limit(1)
                 .correlate(Medicine)
                 .subquery()
             )
+
             query = (
-                select(
-                    Medicine,
-                    batch_subq.c.selling_price,
-                )
-                .options(joinedload(Medicine.image).joinedload(FileAsset))
+                select(Medicine, batch_subq.c.selling_price, FileAsset.asset_id)
+                .join(MedicineImage, MedicineImage.medicine_id == Medicine.medicine_id)
+                .join(FileAsset, MedicineImage.file_asset_id == FileAsset.asset_id)
                 .where(Medicine.is_deleted == False)
                 .order_by(Medicine.medicine_name.asc())
                 .offset(skip)
                 .limit(limit)
             )
+
             result = await db.execute(query)
             rows = result.all()
             response = [self._serialize_light_medicine(row) for row in rows]
             await self.cache_service.set_cache(cache_key, response)
             return response
+
         except Exception as e:
+            print("=================================")
             print(f"[GET_LIGHT_MEDICINES ERROR]: {e}")
             raise HTTPException(
                 status_code=500,
@@ -761,12 +831,8 @@ class InventoryManagementService:
             )
 
     def _serialize_light_medicine(self, row):
-        medicine, selling_price = row
-        thumbnail_url = (
-            f"{self.BASE_FILE_URL}/{medicine.image_asset_id}"
-            if medicine.image_asset_id
-            else -1
-        )
+        medicine, selling_price, file_url = row
+        thumbnail_url = f"{self.BASE_FILE_URL}/{file_url}" if file_url else None
         return {
             "medicine_id": medicine.medicine_id,
             "medicine_name": medicine.medicine_name,
@@ -1121,6 +1187,57 @@ class InventoryManagementService:
             background_tasks.add_task(
                 self._attempt_reallocation_for_medicine, medicine_id
             )
+            
+            # Check if stock was low before and notify admin that stock has been replenished
+            try:
+                # Get total available stock for this medicine
+                stock_query = select(
+                    func.sum(
+                        MedicineBatch.quantity
+                        - func.coalesce(MedicineBatch.reserved_quantity, 0)
+                    )
+                ).filter(
+                    MedicineBatch.medicine_id == medicine_id,
+                    MedicineBatch.is_deleted == False
+                )
+                stock_result = await db.execute(stock_query)
+                total_stock = stock_result.scalar() or 0
+                
+                # If stock is now above threshold (50), notify admin that stock has been replenished
+                if total_stock >= 50:
+                    # Get medicine name
+                    med_result = await db.execute(
+                        select(Medicine.medicine_name).filter(
+                            Medicine.medicine_id == medicine_id
+                        )
+                    )
+                    medicine_name = med_result.scalar_one_or_none() or f"Medicine #{medicine_id}"
+                    
+                    # Get admin users
+                    admin_result = await db.execute(
+                        select(User.user_id).filter(
+                            User.role_id != 1, User.is_deleted == False, User.is_active == True
+                        ).limit(10)
+                    )
+                    admin_ids = [row[0] for row in admin_result.all()]
+                    
+                    for admin_id in admin_ids:
+                        notification_data = NotificationCreate(
+                            type=NotificationType.info,
+                            user_id=admin_id,
+                            by_user_id=None,
+                            title="Stock Replenished",
+                            message=f"Stock for {medicine_name} has been replenished. Current stock: {int(total_stock)} units."
+                        )
+                        await self.notification_service.PUSH_NOTIFICATIONS(
+                            db=db,
+                            to_user_id=admin_id,
+                            notification_content=notification_data,
+                            by_user_id=None
+                        )
+            except Exception as e:
+                print(f"[CREATE_MEDICINE_BATCH] Failed to send notification: {e}")
+            
             return new_batch
         except HTTPException:
             raise
@@ -1232,6 +1349,61 @@ class InventoryManagementService:
             res = await db.execute(q)
             batches = res.scalars().all()
             print(f"[Inventory] Found {len(batches)} low-stock batches")
+            
+            # Send notifications to admin about low stock items
+            if batches:
+                try:
+                    # Get admin users
+                    admin_result = await db.execute(
+                        select(User.user_id).filter(
+                            User.role_id != 1, User.is_deleted == False, User.is_active == True
+                        ).limit(10)
+                    )
+                    admin_ids = [row[0] for row in admin_result.all()]
+                    
+                    # Get medicine names for batches
+                    medicine_ids = list(set([b.medicine_id for b in batches]))
+                    med_result = await db.execute(
+                        select(Medicine.medicine_id, Medicine.medicine_name).filter(
+                            Medicine.medicine_id.in_(medicine_ids)
+                        )
+                    )
+                    medicine_map = {row[0]: row[1] for row in med_result.all()}
+                    
+                    # Group batches by medicine
+                    low_stock_medicines = {}
+                    for batch in batches:
+                        med_id = batch.medicine_id
+                        if med_id not in low_stock_medicines:
+                            low_stock_medicines[med_id] = {
+                                'name': medicine_map.get(med_id, f"Medicine #{med_id}"),
+                                'count': 0,
+                                'total_stock': 0
+                            }
+                        low_stock_medicines[med_id]['count'] += 1
+                        low_stock_medicines[med_id]['total_stock'] += (
+                            int(batch.quantity) - int(batch.reserved_quantity or 0)
+                        )
+                    
+                    # Send notification for each low stock medicine
+                    for admin_id in admin_ids:
+                        for med_id, info in low_stock_medicines.items():
+                            notification_data = NotificationCreate(
+                                type=NotificationType.alert,
+                                user_id=admin_id,
+                                by_user_id=None,
+                                title="Low Stock Alert",
+                                message=f"{info['name']} is running low. Available stock: {info['total_stock']} units (threshold: {threshold})"
+                            )
+                            await self.notification_service.PUSH_NOTIFICATIONS(
+                                db=db,
+                                to_user_id=admin_id,
+                                notification_content=notification_data,
+                                by_user_id=None
+                            )
+                except Exception as e:
+                    print(f"[GET_LOW_STOCK_ITEMS] Failed to send notification: {e}")
+            
             return batches
         except Exception as e:
             print(f"[Inventory Error] GET_LOW_STOCK_ITEMS failed: {e}")
@@ -1261,6 +1433,57 @@ class InventoryManagementService:
             res = await db.execute(q)
             batches = res.scalars().all()
             print(f"[Inventory] Found {len(batches)} expired batches")
+            
+            # Send notifications to admin about expired batches
+            if batches:
+                try:
+                    # Get admin users
+                    admin_result = await db.execute(
+                        select(User.user_id).filter(
+                            User.role_id != 1, User.is_deleted == False, User.is_active == True
+                        ).limit(10)
+                    )
+                    admin_ids = [row[0] for row in admin_result.all()]
+                    
+                    # Get medicine names for batches
+                    medicine_ids = list(set([b.medicine_id for b in batches]))
+                    med_result = await db.execute(
+                        select(Medicine.medicine_id, Medicine.medicine_name).filter(
+                            Medicine.medicine_id.in_(medicine_ids)
+                        )
+                    )
+                    medicine_map = {row[0]: row[1] for row in med_result.all()}
+                    
+                    # Group batches by medicine
+                    expired_medicines = {}
+                    for batch in batches:
+                        med_id = batch.medicine_id
+                        if med_id not in expired_medicines:
+                            expired_medicines[med_id] = {
+                                'name': medicine_map.get(med_id, f"Medicine #{med_id}"),
+                                'count': 0
+                            }
+                        expired_medicines[med_id]['count'] += 1
+                    
+                    # Send notification for each expired medicine
+                    for admin_id in admin_ids:
+                        for med_id, info in expired_medicines.items():
+                            notification_data = NotificationCreate(
+                                type=NotificationType.alert,
+                                user_id=admin_id,
+                                by_user_id=None,
+                                title="Expired Batch Alert",
+                                message=f"{info['name']} has {info['count']} expired batch(es). Please remove from inventory."
+                            )
+                            await self.notification_service.PUSH_NOTIFICATIONS(
+                                db=db,
+                                to_user_id=admin_id,
+                                notification_content=notification_data,
+                                by_user_id=None
+                            )
+                except Exception as e:
+                    print(f"[GET_EXPIRED_BATCHES] Failed to send notification: {e}")
+            
             return batches
         except Exception as e:
             print(f"[Inventory Error] GET_EXPIRED_BATCHES failed: {e}")
@@ -1294,6 +1517,60 @@ class InventoryManagementService:
             print(
                 f"[Inventory] Found {len(batches)} batches expiring within {days} days"
             )
+            
+            # Send notifications to admin about expiring soon batches
+            if batches:
+                try:
+                    # Get admin users
+                    admin_result = await db.execute(
+                        select(User.user_id).filter(
+                            User.role_id != 1, User.is_deleted == False, User.is_active == True
+                        ).limit(10)
+                    )
+                    admin_ids = [row[0] for row in admin_result.all()]
+                    
+                    # Get medicine names for batches
+                    medicine_ids = list(set([b.medicine_id for b in batches]))
+                    med_result = await db.execute(
+                        select(Medicine.medicine_id, Medicine.medicine_name).filter(
+                            Medicine.medicine_id.in_(medicine_ids)
+                        )
+                    )
+                    medicine_map = {row[0]: row[1] for row in med_result.all()}
+                    
+                    # Group batches by medicine
+                    expiring_medicines = {}
+                    for batch in batches:
+                        med_id = batch.medicine_id
+                        if med_id not in expiring_medicines:
+                            expiring_medicines[med_id] = {
+                                'name': medicine_map.get(med_id, f"Medicine #{med_id}"),
+                                'count': 0,
+                                'earliest_expiry': batch.expiry_date
+                            }
+                        expiring_medicines[med_id]['count'] += 1
+                        if batch.expiry_date < expiring_medicines[med_id]['earliest_expiry']:
+                            expiring_medicines[med_id]['earliest_expiry'] = batch.expiry_date
+                    
+                    # Send notification for each expiring medicine
+                    for admin_id in admin_ids:
+                        for med_id, info in expiring_medicines.items():
+                            notification_data = NotificationCreate(
+                                type=NotificationType.alert,
+                                user_id=admin_id,
+                                by_user_id=None,
+                                title="Expiring Soon Alert",
+                                message=f"{info['name']} has {info['count']} batch(es) expiring within {days} days. Earliest expiry: {info['earliest_expiry']}"
+                            )
+                            await self.notification_service.PUSH_NOTIFICATIONS(
+                                db=db,
+                                to_user_id=admin_id,
+                                notification_content=notification_data,
+                                by_user_id=None
+                            )
+                except Exception as e:
+                    print(f"[GET_EXPIRING_SOON] Failed to send notification: {e}")
+            
             return batches
         except Exception as e:
             print(f"[Inventory Error] GET_EXPIRING_SOON failed: {e}")
@@ -1606,7 +1883,7 @@ class InventoryManagementService:
             count_result = await db.execute(
                 select(func.count()).filter(Tag.is_deleted == False)
             )
-            data = [TagReponse.from_orm(tag).model_dump() for tag in tags]
+            data = [TagResponse.from_orm(tag).model_dump() for tag in tags]
             total = count_result.scalar_one()
             return JSONResponse(
                 status_code=200, content={"msg": {"totalCount": total, "data": data}}

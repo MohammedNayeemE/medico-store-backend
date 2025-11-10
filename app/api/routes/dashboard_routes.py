@@ -28,7 +28,7 @@ def get_dashboard_service(db: AsyncSession = Depends(get_db)) -> DashboardServic
 
 
 # ============= COMPLETE DASHBOARD =============
-@router.get("/", response_model=CompleteDashboard)
+@router.get("/", response_model=CompleteDashboard, include_in_schema=False)
 async def get_complete_dashboard(
     period: str = Query("30d", description="Period: 7d, 30d, 90d, 1y, all"),
     service: DashboardService = Depends(get_dashboard_service),
@@ -345,4 +345,3 @@ async def export_orders_data(
         return {"message": "CSV export not implemented yet"}
 
     return orders
-

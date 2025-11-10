@@ -123,3 +123,55 @@ class MailService:
         )
         fast_mail_obj = FastMail(self.mail_conf)
         await fast_mail_obj.send_message(message)
+
+    async def SEND_ORDER_CONFIRMED_MAIL(
+        self,
+        user_email: EmailStr,
+        user_name: str,
+        order_id: int,
+        total_amount: float,
+        predicted_delivery_date: datetime,
+        tracking_link: str | None = None,
+    ):
+        """
+        Sends an order confirmation email to the customer when their order
+        has been successfully confirmed and is scheduled for delivery.
+        Includes estimated delivery date and tracking link (if available).
+        """
+        delivery_date_str = predicted_delivery_date.strftime("%d %B %Y")
+
+        subject = f"Your Medico Store Order #{order_id} is Confirmed 🎉"
+        body_html = f"""
+            <h3>Hello {user_name},</h3>
+            <p>We’re excited to let you know that your order <b>#{order_id}</b> has been <b>confirmed</b>!</p>
+            <p><b>Total Amount:</b> ₹{total_amount:.2f}</p>
+            <p><b>Estimated Delivery Date:</b> {delivery_date_str}</p>
+        """
+
+        if tracking_link:
+            body_html += f"""
+                <p>You can track your order anytime using the link below:</p>
+                <p>
+                    <a href="{tracking_link}" 
+                       style="background-color: #28a745; color: white; padding: 10px 18px;
+                              text-decoration: none; border-radius: 5px;">
+                        Track My Order
+                    </a>
+                </p>
+            """
+
+        body_html += """
+            <br/>
+            <p>We’ll notify you once your order is out for delivery.</p>
+            <p>Thank you for trusting <b>Medico Store</b> with your healthcare needs!</p>
+        """
+
+        message = MessageSchema(
+            subject=subject,
+            recipients=[user_email],
+            body=body_html,
+            subtype="html",
+        )
+
+        fast_mail_obj = FastMail(self.mail_conf)
+        await fast_mail_obj.send_message(message)

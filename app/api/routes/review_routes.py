@@ -37,6 +37,19 @@ async def get_reviews_for_medicine(
     return result
 
 
+@router.get(
+    "/my",
+)
+async def my_reviews(
+    current_user: User = Security(get_current_user, scopes=["review:read"]),
+    db: AsyncSession = Depends(get_postgres),
+):
+    result = await review_manager.GET_REVIEWS_BY_USER(
+        db=db, user_id=current_user.user_id, role_id=current_user.role_id
+    )
+    return result
+
+
 # -----------------------------------------------------------
 @router.get(
     "/{review_id}",
@@ -46,19 +59,6 @@ async def get_reviews_by_id(
     db: AsyncSession = Depends(get_postgres),
 ):
     result = await review_manager.GET_REVIEW_BY_ID(db=db, review_id=review_id)
-    return result
-
-
-@router.get(
-    "/my",
-)
-async def my_reviews(
-    current_user: User = Security(get_current_user, scopes=["review:read"]),
-    db: AsyncSession = Depends(get_postgres),
-):
-    result = await review_manager.GET_REVIEWS_BY_USER(
-        db=db, user_id=current_user.user_id
-    )
     return result
 
 

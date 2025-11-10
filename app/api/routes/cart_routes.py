@@ -1,6 +1,8 @@
 from typing import List
 
 from fastapi import APIRouter, Body, Depends, Path, Security
+from fastapi_limiter import FastAPILimiter
+from fastapi_limiter.depends import RateLimiter
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependecies.auth import get_current_user
@@ -11,16 +13,21 @@ from app.schemas.cart_schemas import (
     CartItemResponse,
     CartItemUpdate,
     CartResponse,
+    CartWithDiscountResponse,
 )
 from app.services.cart_service import CartService
 
-router = APIRouter(prefix="/cart", tags=["Cart"])
+router = APIRouter(
+    prefix="/cart",
+    tags=["Cart"],
+    dependencies=[Depends(RateLimiter(times=100, seconds=60))],
+)
 cart_manager = CartService()
 
 # ===================== CART ROUTES ===================== #
 
 
-@router.get("/", description="Get the current user's cart")
+@router.get("/", description="Get the current user's cart", response_model=CartResponse)
 async def get_cart(
     db: AsyncSession = Depends(get_postgres),
     current_user: User = Security(get_current_user, scopes=["cart:read"]),
@@ -93,6 +100,7 @@ async def clear_cart(
 @router.get(
     "/get-cart-page/",
     description="Get cart with automatic discounts applied",
+    response_model=CartWithDiscountResponse,
 )
 async def get_cart_with_discounts(
     db: AsyncSession = Depends(get_postgres),

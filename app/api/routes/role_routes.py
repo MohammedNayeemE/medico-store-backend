@@ -1,7 +1,18 @@
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, Body, Depends, Path, Query, Request, Security
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Body,
+    Depends,
+    Path,
+    Query,
+    Request,
+    Security,
+)
 from fastapi.responses import JSONResponse
+from fastapi_limiter import FastAPILimiter
+from fastapi_limiter.depends import RateLimiter
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,7 +22,11 @@ from app.models.user_management_models import User
 from app.schemas.user_schemas import EmployeeCreate, RoleCreate
 from app.services.role_management_service import RoleManagementService
 
-router = APIRouter(prefix="/roles", tags=["Roles"])
+router = APIRouter(
+    prefix="/roles",
+    tags=["Roles"],
+    dependencies=[Depends(RateLimiter(times=100, seconds=60))],
+)
 role_manager = RoleManagementService()
 
 
@@ -31,7 +46,7 @@ async def create_role(
     ip_address = request.client.host if request.client else None
     user_agent = request.headers.get("user-agent", None)
     actor_role = current_user.role.name if current_user.role else None
-    
+
     result = await role_manager.CREATE_ROLE(
         db=db,
         role_data=role_data,
@@ -56,7 +71,7 @@ async def add_employee(
     ip_address = request.client.host if request.client else None
     user_agent = request.headers.get("user-agent", None)
     actor_role = current_user.role.name if current_user.role else None
-    
+
     result = await role_manager.ADD_EMPLOYEE(
         db=db,
         employeeData=employeeData,
@@ -82,7 +97,7 @@ async def get_employees(
     ip_address = request.client.host if request.client else None
     user_agent = request.headers.get("user-agent", None)
     actor_role = current_user.role.name if current_user.role else None
-    
+
     result = await role_manager.GET_EMPLOYEES(
         db=db,
         skip=skip,
@@ -107,7 +122,7 @@ async def get_permissions(
     ip_address = request.client.host if request.client else None
     user_agent = request.headers.get("user-agent", None)
     actor_role = current_user.role.name if current_user.role else None
-    
+
     result = await role_manager.GET_PERMISSIONS_FOR_ROLE(
         db=db,
         role_id=role_id,
@@ -135,7 +150,7 @@ async def get_roles(
     ip_address = request.client.host if request.client else None
     user_agent = request.headers.get("user-agent", None)
     actor_role = current_user.role.name if current_user.role else None
-    
+
     result = await role_manager.GET_ROLES(
         db=db,
         name=name,
@@ -162,7 +177,7 @@ async def update_role(
     ip_address = request.client.host if request.client else None
     user_agent = request.headers.get("user-agent", None)
     actor_role = current_user.role.name if current_user.role else None
-    
+
     result = await role_manager.UPDATE_ROLE(
         db=db,
         role_id=role_id,

@@ -25,7 +25,7 @@ async def trigger_backup(
         backup_type=req.backup_type,
         parts=",".join(req.parts or ["postgres", "mongo", "files"]),
         status="queued",
-        created_by=current_user.username,
+        created_by=str(current_user.user_id),
     )
     db.add(backup)
     await db.commit()

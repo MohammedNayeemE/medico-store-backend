@@ -7,22 +7,27 @@ CACHE_TTL = 600
 
 
 class CacheService:
-    def __init__(self) -> None:
-        self.cache = db.redis_client
+    def __init__(self):
+        pass
 
     async def get_cache(self, key: str):
-        if not self.cache:
+        redis = db.redis_client
+        if redis is None:
+            print("[CacheService] Redis not initialized")
             return None
-        data = await self.cache.get(key)
+        data = await redis.get(key)
         return json.loads(data) if data else None
 
     async def set_cache(self, key: str, value: Any, ttl: int = CACHE_TTL):
-        if not self.cache:
+        redis = db.redis_client
+        if redis is None:
+            print("[CacheService] Redis not initialized")
             return
-        await self.cache.set(key, json.dumps(value, default=str), ex=ttl)
+        await redis.set(key, json.dumps(value, default=str), ex=ttl)
 
     async def invalidate_pattern(self, pattern: str):
-        if not self.cache:
+        redis = db.redis_client
+        if redis is None:
             return
-        async for key in self.cache.scan_iter(match=pattern):
-            await self.cache.delete(key)
+        async for key in redis.scan_iter(match=pattern):
+            await redis.delete(key)

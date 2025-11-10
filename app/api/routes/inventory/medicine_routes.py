@@ -1,6 +1,9 @@
+from os import times
 from typing import List, Optional
 
 from fastapi import APIRouter, Body, Depends, File, Path, Query, Security, UploadFile
+from fastapi_limiter import FastAPILimiter
+from fastapi_limiter.depends import RateLimiter
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependecies.auth import get_current_user
@@ -10,7 +13,11 @@ from app.models.user_management_models import User
 from app.schemas.inventory_schemas import MedicineCreate
 from app.services.inventory_service import InventoryManagementService
 
-router = APIRouter(prefix="/medicines", tags=["Medicines"])
+router = APIRouter(
+    prefix="/medicines",
+    tags=["Medicines"],
+    dependencies=[Depends(RateLimiter(times=200, seconds=60))],
+)
 inventory_manager = InventoryManagementService()
 
 
@@ -156,36 +163,6 @@ async def soft_delete_medicine(
         db=db, medicine_id=medicine_id, deleted_by=current_user.user_id
     )
     return result
-
-
-#
-# @router.get(
-#     "/customer/medicines",
-#     description="List all available medicines with search, filters, and pagination",
-# )
-# async def list_medicines_for_customer(
-#     db: AsyncSession = Depends(get_postgres),
-#     search: Optional[str] = Query(None, description="Search by name or description"),
-#     category: Optional[str] = Query(None),
-#     tag: Optional[str] = Query(None),
-#     min_price: Optional[float] = Query(None),
-#     max_price: Optional[float] = Query(None),
-#     sort_by: Optional[str] = Query("name", description="Sort by 'price' or 'name'"),
-#     order: Optional[str] = Query("asc", description="Sort order: 'asc' or 'desc'"),
-#     skip: int = Query(0, ge=0),
-#     limit: int = Query(10, le=100),
-# ):
-#     result = await inventory_manager.GET_AVAILABLE_MEDICINES_FOR_CUSTOMER(
-#         db=db,
-#         name=search,
-#         category=category,
-#         tag=tag,
-#         sort_by=sort_by,
-#         sort_order=order,
-#         skip=skip,
-#         limit=limit,
-#     )
-#     return result
 
 
 @router.get(

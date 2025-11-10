@@ -2,6 +2,8 @@ from typing import List
 
 from fastapi import APIRouter, Body, Depends, File, Path, Query, Security, UploadFile
 from fastapi.responses import JSONResponse
+from fastapi_limiter import FastAPILimiter
+from fastapi_limiter.depends import RateLimiter
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import roles
 
@@ -23,7 +25,11 @@ from app.schemas.user_schemas import (
 from app.services.file_service import FileService
 from app.services.profile_management.profile_service import ProfileService
 
-router = APIRouter(prefix="/profile", tags=["Profiles"])
+router = APIRouter(
+    prefix="/profile",
+    tags=["Profiles"],
+    dependencies=[Depends(RateLimiter(times=100, seconds=60))],
+)
 profile = ProfileService()
 file_manager = FileService()
 
@@ -60,8 +66,8 @@ async def upload_admin_pic(
     result = await file_manager.UPLOAD_SINGLE_FILE(
         bucket=bucket, db=db, user_id=current_user.user_id, file=file
     )
-    file_url = f"http://localhost:8000/api/v1/file_routes/assets/{result['asset_id']}"
-    return file_url
+    file_url = f"http://localhost:8000/api/v1/files/assets/{result['asset_id']}"
+    return {"file_url": file_url, "profile_id": result["asset_id"]}
 
 
 @router.post(
@@ -222,7 +228,7 @@ async def get_family_members(
 
 
 @router.put(
-    "/{member_id}",
+    "/members/{member_id}",
     description="Update a family member by ID",
 )
 async def update_family_member(

@@ -259,6 +259,7 @@ class FamilyMember(Base):
     member_id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(255), nullable=False)
     phone_number = Column(String(14))
+    relation = Column(String(50), default="other")
     email = Column(String(255))
     age = Column(Integer, nullable=False)
     gender = Column(String(1), nullable=False)

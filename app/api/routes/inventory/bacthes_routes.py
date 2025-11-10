@@ -40,41 +40,6 @@ async def list_all_batches(
     return result
 
 
-@router.get("/{batch_id}", description="Get batch details by ID")
-async def get_batch_by_id(
-    batch_id: int = Path(...),
-    current_user=Security(get_current_user, scopes=["batch:read"]),
-    db: AsyncSession = Depends(get_postgres),
-):
-    result = await inventory_manager.GET_BATCH_BY_ID(db=db, batch_id=batch_id)
-    return result
-
-
-@router.put("/{batch_id}", description="Update a batch by ID")
-async def update_batch(
-    batch_id: int = Path(...),
-    current_user=Security(get_current_user, scopes=["batch:write"]),
-    db: AsyncSession = Depends(get_postgres),
-    batch_data: MedicineBatchCreate = Body(...),
-):
-    result = await inventory_manager.UPDATE_BATCH(
-        db=db, batch_id=batch_id, batch_data=batch_data
-    )
-    return result
-
-
-@router.delete("/{batch_id}", description="Soft delete a batch by ID")
-async def soft_delete_batch(
-    batch_id: int = Path(...),
-    current_user: User = Security(get_current_user, scopes=["batch:delete"]),
-    db: AsyncSession = Depends(get_postgres),
-):
-    result = await inventory_manager.SOFT_DELETE_BATCH(
-        db=db, batch_id=batch_id, deleted_by=current_user.user_id
-    )
-    return result
-
-
 @router.get("/low-stock", description="List low-stock medicine batches")
 async def get_low_stock_items(
     threshold: int = Query(10, ge=1),
@@ -115,3 +80,38 @@ async def get_stock_summary(
     db: AsyncSession = Depends(get_postgres),
 ):
     return await inventory_manager.GET_STOCK_SUMMARY(db, skip, limit)
+
+
+@router.get("/{batch_id}", description="Get batch details by ID")
+async def get_batch_by_id(
+    batch_id: int = Path(...),
+    current_user=Security(get_current_user, scopes=["batch:read"]),
+    db: AsyncSession = Depends(get_postgres),
+):
+    result = await inventory_manager.GET_BATCH_BY_ID(db=db, batch_id=batch_id)
+    return result
+
+
+@router.put("/{batch_id}", description="Update a batch by ID")
+async def update_batch(
+    batch_id: int = Path(...),
+    current_user=Security(get_current_user, scopes=["batch:write"]),
+    db: AsyncSession = Depends(get_postgres),
+    batch_data: MedicineBatchCreate = Body(...),
+):
+    result = await inventory_manager.UPDATE_BATCH(
+        db=db, batch_id=batch_id, batch_data=batch_data
+    )
+    return result
+
+
+@router.delete("/{batch_id}", description="Soft delete a batch by ID")
+async def soft_delete_batch(
+    batch_id: int = Path(...),
+    current_user: User = Security(get_current_user, scopes=["batch:delete"]),
+    db: AsyncSession = Depends(get_postgres),
+):
+    result = await inventory_manager.SOFT_DELETE_BATCH(
+        db=db, batch_id=batch_id, deleted_by=current_user.user_id
+    )
+    return result

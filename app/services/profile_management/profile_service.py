@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 import httpx
 from fastapi import HTTPException
@@ -155,6 +155,7 @@ class ProfileService:
                 user_id=customer_id,
                 name=profile_data.name,
                 address_id=profile_data.address_id,
+                email=profile_data.email,
                 profile_pic=profile_data.profile_pic,
                 blood_group=profile_data.blood_group,
                 gender=profile_data.gender,
@@ -352,6 +353,7 @@ class ProfileService:
                 user_id=user_id,
                 name=data.name,
                 phone_number=data.phone_number,
+                relation=data.relation,
                 email=data.email,
                 age=data.age,
                 gender=data.gender,

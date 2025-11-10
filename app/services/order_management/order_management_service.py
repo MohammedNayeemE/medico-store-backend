@@ -12,7 +12,7 @@ from sqlalchemy import asc, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
-from app.core.exceptions import NotFoundException
+from app.core.exceptions import ForbiddenException, NotFoundException
 from app.models.enums import (
     OrderStatusEnum,
     PrescriptionStatusEnum,
@@ -40,6 +40,9 @@ from app.schemas.request_order import (
 )
 from app.services.file_service import FileService
 from app.services.mail_service import MailService
+from app.services.notification_service import NotificationService
+from app.schemas.notification_schemas import NotificationCreate
+from app.models.enums import NotificationType
 
 
 class OrderService:
@@ -47,10 +50,9 @@ class OrderService:
         self.file_manager = FileService()
         self.MAX_FILE_SIZE_MB = 10
         self.ALLOWED_CONTENT_TYPES = {"image/png", "image/jpeg", "application/pdf"}
-        self.BASE_FILE_URL = (
-            "http://localhost:8000/api/file_routes/assets/prescriptions"
-        )
+        self.BASE_FILE_URL = "http://localhost:8000/api/v1/files/assets/prescriptions"
         self.mail_service = MailService()
+        self.notification_service = NotificationService()
 
     def _attach_file_url(self, asset_id: str) -> str:
         return f"{self.BASE_FILE_URL}/{asset_id}"
@@ -373,6 +375,34 @@ class OrderService:
                 db.add(order_item)
             await db.commit()
             await db.refresh(new_order)
+            
+            # Send notification to admin about new request order
+            try:
+                # Get admin users (role_id != 1)
+                admin_result = await db.execute(
+                    select(User.user_id).filter(
+                        User.role_id != 1, User.is_deleted == False, User.is_active == True
+                    ).limit(10)
+                )
+                admin_ids = [row[0] for row in admin_result.all()]
+                
+                for admin_id in admin_ids:
+                    notification_data = NotificationCreate(
+                        type=NotificationType.request,
+                        user_id=admin_id,
+                        by_user_id=current_user.user_id,
+                        title="New Order Request",
+                        message=f"New order request #{new_order.request_order_id} has been created by customer."
+                    )
+                    await self.notification_service.PUSH_NOTIFICATIONS(
+                        db=db,
+                        to_user_id=admin_id,
+                        notification_content=notification_data,
+                        by_user_id=current_user.user_id
+                    )
+            except Exception as e:
+                print(f"[CREATE_REQUEST_ORDER] Failed to send notification: {e}")
+            
             response = RequestOrderResponse(
                 request_order_id=new_order.request_order_id,
                 customer_id=new_order.customer_id,
@@ -471,7 +501,9 @@ class OrderService:
                     {
                         "request_order_item_id": item.request_order_item_id,
                         "medicine_id": item.medicine_id,
-                        "medicine_name": item.medicine.name if item.medicine else None,
+                        "medicine_name": (
+                            item.medicine.generic_name if item.medicine else None
+                        ),
                         "quantity": item.quantity,
                         "estimated_price": float(item.estimated_price or 0),
                     }
@@ -480,7 +512,7 @@ class OrderService:
             if request_order.prescription:
                 prescription_info = {
                     "prescription_id": request_order.prescription.prescription_id,
-                    "file_url": f"http://localhost:8000/api/file_routes/assets/{request_order.prescription.asset_id}",
+                    "file_url": f"http://localhost:8000/api/v1/files/assets/{request_order.prescription.asset_id}",
                 }
             response = {
                 "request_order_id": request_order.request_order_id,
@@ -525,10 +557,11 @@ class OrderService:
                     status_code=403,
                     detail="You are not authorized to cancel this order",
                 )
-            if request_order.status not in [
-                RequestOrderStatusEnum.pending,
+            if request_order.status in [
                 RequestOrderStatusEnum.awaiting_payment,
                 RequestOrderStatusEnum.approved,
+                RequestOrderStatusEnum.cancelled,
+                RequestOrderStatusEnum.converted,
             ]:
                 raise HTTPException(
                     status_code=400,
@@ -817,6 +850,25 @@ class OrderService:
                 prescription_obj.status = PrescriptionStatusEnum.verified.value
             await db.commit()
             await db.refresh(order)
+            
+            # Send notification to customer about order approval
+            try:
+                notification_data = NotificationCreate(
+                    type=NotificationType.info,
+                    user_id=order.customer_id,
+                    by_user_id=admin_id,
+                    title="Order Approved",
+                    message=f"Your order request #{order.request_order_id} has been approved."
+                )
+                await self.notification_service.PUSH_NOTIFICATIONS(
+                    db=db,
+                    to_user_id=order.customer_id,
+                    notification_content=notification_data,
+                    by_user_id=admin_id
+                )
+            except Exception as e:
+                print(f"[APPROVE_REQUEST_ORDER] Failed to send notification: {e}")
+            
             return {
                 "message": "Request order approved successfully",
                 "request_order_id": order.request_order_id,
@@ -868,6 +920,25 @@ class OrderService:
                 order.verified_at = datetime.utcnow()
             await db.commit()
             await db.refresh(order)
+            
+            # Send notification to customer about order rejection
+            try:
+                notification_data = NotificationCreate(
+                    type=NotificationType.alert,
+                    user_id=order.customer_id,
+                    by_user_id=admin_id,
+                    title="Order Rejected",
+                    message=f"Your order request #{order.request_order_id} has been rejected. Reason: {order.remarks if order.remarks else 'No reason provided'}"
+                )
+                await self.notification_service.PUSH_NOTIFICATIONS(
+                    db=db,
+                    to_user_id=order.customer_id,
+                    notification_content=notification_data,
+                    by_user_id=admin_id
+                )
+            except Exception as e:
+                print(f"[REJECT_REQUEST_ORDER] Failed to send notification: {e}")
+            
             return {
                 "message": "Request order rejected successfully",
                 "request_order_id": order.request_order_id,
@@ -952,6 +1023,18 @@ class OrderService:
                 detail="Internal server error: [convert_request_to_order]",
             )
 
+    async def GET_ALL_ORDERS(self, db: AsyncSession, role_id: int):
+        try:
+            if role_id == 1:
+                raise ForbiddenException("forbidden access")
+            result = await db.execute(select(Order).filter(Order.is_deleted == False))
+            orders = result.scalars().all()
+            return orders
+        except HTTPException:
+            raise
+        except Exception as e:
+            pass
+
     async def SEND_PAYMENT_NOTIFICATION(
         self,
         db: AsyncSession,
@@ -979,11 +1062,9 @@ class OrderService:
                     status_code=400,
                     detail=f"Cannot send payment notification for order in status: {order.status}",
                 )
-            # ✅ Compute total estimated price
             total_estimated_price = sum(
                 float(item.estimated_price or 0) for item in order.items
             )
-            # ✅ Update status to awaiting payment
             order.status = RequestOrderStatusEnum.awaiting_payment.value
             order.updated_at = datetime.utcnow()
             if hasattr(order, "verified_by"):
@@ -1000,18 +1081,35 @@ class OrderService:
                 raise HTTPException(status_code=404, detail="Customer not found")
             user_email = user.email
             user_name = user_email.split("@")[0] if user_email else "Customer"
-            # ✅ Prepare payment link
             link = f"http://localhost:8000/api/v1/payments/initiate?request_order_id={request_order_id}"
-            # ✅ Queue background email notification
             background_tasks.add_task(
                 self.mail_service.SEND_PAYMENT_NOTIFICATION_MAIL,
                 user_email,
                 user_name,
                 request_order_id,
-                total_estimated_price,  # ✅ fixed
+                total_estimated_price,
                 order.prescription_id,
                 link,
             )
+            
+            # Send push notification to customer about payment
+            try:
+                notification_data = NotificationCreate(
+                    type=NotificationType.request,
+                    user_id=order.customer_id,
+                    by_user_id=admin_id,
+                    title="Payment Required",
+                    message=f"Please complete payment for order #{request_order_id}. Total amount: ₹{total_estimated_price:.2f}"
+                )
+                await self.notification_service.PUSH_NOTIFICATIONS(
+                    db=db,
+                    to_user_id=order.customer_id,
+                    notification_content=notification_data,
+                    by_user_id=admin_id
+                )
+            except Exception as e:
+                print(f"[SEND_PAYMENT_NOTIFICATION] Failed to send push notification: {e}")
+            
             return {
                 "message": "Payment notification sent successfully",
                 "request_order_id": order.request_order_id,
@@ -1172,6 +1270,32 @@ class OrderService:
             await db.flush()
             await db.commit()
             await db.refresh(order_obj)
+            
+            # Send notification to customer about order status change
+            try:
+                status_messages = {
+                    OrderStatusEnum.shipped: "Your order has been shipped",
+                    OrderStatusEnum.delivered: "Your order has been delivered",
+                    OrderStatusEnum.cancelled: "Your order has been cancelled"
+                }
+                
+                if new_status in status_messages:
+                    notification_data = NotificationCreate(
+                        type=NotificationType.info if new_status != OrderStatusEnum.cancelled else NotificationType.alert,
+                        user_id=order_obj.customer_id,
+                        by_user_id=None,
+                        title="Order Status Updated",
+                        message=f"Order #{order_obj.order_id}: {status_messages[new_status]}"
+                    )
+                    await self.notification_service.PUSH_NOTIFICATIONS(
+                        db=db,
+                        to_user_id=order_obj.customer_id,
+                        notification_content=notification_data,
+                        by_user_id=None
+                    )
+            except Exception as e:
+                print(f"[UPDATE_ORDER_STATUS] Failed to send notification: {e}")
+            
             return order_obj
         except HTTPException:
             raise

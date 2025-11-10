@@ -37,6 +37,20 @@ async def initiate_payment(
 
 
 @router.get(
+    "/mypayments",
+    description="List payment history for a specific customer",
+)
+async def get_customer_payment_history(
+    db: AsyncSession = Depends(get_postgres),
+    current_user: User = Security(get_current_user, scopes=["payment:read"]),
+):
+    result = await payment_manager.GET_CUSTOMER_PAYMENTS(
+        db=db, user_id=current_user.user_id
+    )
+    return result
+
+
+@router.get(
     "/{order_id}",
     description="Get all payments related to a specific order",
 )
@@ -61,20 +75,6 @@ async def update_payment_status(
 ):
     result = await payment_manager.UPDATE_PAYMENT_STATUS(
         db=db, payment_id=payment_id, new_status=status
-    )
-    return result
-
-
-@router.get(
-    "/mypayments",
-    description="List payment history for a specific customer",
-)
-async def get_customer_payment_history(
-    db: AsyncSession = Depends(get_postgres),
-    current_user: User = Security(get_current_user, scopes=["payment:read"]),
-):
-    result = await payment_manager.GET_CUSTOMER_PAYMENTS(
-        db=db, user_id=current_user.user_id
     )
     return result
 

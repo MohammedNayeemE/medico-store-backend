@@ -1,6 +1,7 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
-
+from fastapi_limiter import FastAPILimiter
+from fastapi_limiter.depends import RateLimiter
 from . import (
     alternates_routes,
     bacthes_routes,
@@ -11,7 +12,7 @@ from . import (
     tags_routes,
 )
 
-router = APIRouter(prefix="/inventory")
+router = APIRouter(prefix="/inventory" , dependencies=[Depends(RateLimiter(times=100 , seconds=60))])
 
 #
 # @router.get("/dev", description="Health check endpoint for Inventory routes")

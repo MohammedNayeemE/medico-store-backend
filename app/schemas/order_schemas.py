@@ -179,3 +179,58 @@ class OrderResponse(BaseModel):
     )
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class CustomerInfo(BaseModel):
+    phone_number: str
+    email: Optional[str] = None
+
+
+class MemberInfo(BaseModel):
+    name: str
+    relation: str
+    age: int
+
+
+class PrescriptionInfo(BaseModel):
+    status: str
+
+
+class BatchInfo(BaseModel):
+    medicine_batch: str = Field(..., alias="batch_number")
+    selling_price: float
+
+
+class OrderItemInfo(BaseModel):
+    quantity: int
+    price: float
+    batch: BatchInfo
+
+
+class InvoiceInfo(BaseModel):
+    invoice_number: str
+    gross_amount: float
+    total_tax: float
+    payment_status: str
+
+
+class PaymentInfo(BaseModel):
+    amount: float
+    status: str
+    payment_mode: str
+    transaction_id: str
+
+
+class OrderDetailsResponse(BaseModel):
+    order_id: int
+    status: str
+    total_amount: float
+    predicted_delivery_date: Optional[datetime]
+    created_at: datetime
+
+    customer: CustomerInfo
+    member: Optional[MemberInfo]
+    prescription: Optional[PrescriptionInfo]
+    order_items: List[OrderItemInfo]
+    invoice: Optional[InvoiceInfo]
+    payments: List[PaymentInfo]

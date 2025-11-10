@@ -2,6 +2,7 @@ import re
 from datetime import date, datetime
 from typing import List, Optional
 
+from fastapi import File
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, constr, field_validator
 
 # =====================================================
@@ -99,7 +100,67 @@ class RoleCreate(BaseModel):
         ..., example="Administrator with full permissions"
     )
     permissions: List[str] = Field(
-        ..., example=["read:users", "write:users", "delete:users"]
+        ...,
+        example=[
+            "address_type:delete",
+            "address_type:read",
+            "address_type:write",
+            "admin:read",
+            "admin:write",
+            "alternate:update",
+            "alternate:write",
+            "auth:write",
+            "backup:read",
+            "backup:write",
+            "batch:delete",
+            "batch:read",
+            "batch:write",
+            "category:read",
+            "category:write",
+            "content:write",
+            "coupon:read",
+            "coupon:write",
+            "dashboard:read",
+            "discount:delete",
+            "discount:read",
+            "discount:write",
+            "gst:read",
+            "gst:write",
+            "issue:read",
+            "issue:write",
+            "medicine:read",
+            "medicine:delete",
+            "medicine:write",
+            "members:read",
+            "members:write",
+            "notification:read",
+            "order:delete",
+            "order:read",
+            "order:write",
+            "payment:read",
+            "payment:update",
+            "payment:write",
+            "prescription:read",
+            "prescription:write",
+            "profile:read",
+            "profile:update",
+            "profile:write",
+            "request_medicine:read",
+            "request_medicine:write",
+            "request_order_admin:read",
+            "request_order_admin:update",
+            "request_order:read",
+            "review:delete",
+            "review:read",
+            "role:read",
+            "role:update",
+            "role:write",
+            "side_effect:read",
+            "side_effect:write",
+            "tag:read",
+            "tag:write",
+            "reports:read",
+        ],
     )
 
 
@@ -213,6 +274,7 @@ class FamilyMemberCreate(BaseModel):
         example="+919876543210",
         description="Indian phone number with +91 country code",
     )
+    relation: Optional[str] = Field(None, example="father")
     email: Optional[EmailStr] = Field(None, example="ayesha.khan@example.com")
     age: int = Field(..., ge=0, le=120, example=32)
     gender: constr(pattern=r"^[MF]$") = Field(
@@ -225,6 +287,7 @@ class FamilyMemberUpdate(BaseModel):
     name: Optional[str] = Field(None, example="Updated Name")
     phone_number: Optional[str] = Field(None, example="9123456789")
     email: Optional[EmailStr] = Field(None, example="new.email@example.com")
+    relation: Optional[str] = Field(None, example="father")
     age: Optional[int] = Field(None, ge=0, le=120, example=30)
     gender: Optional[str] = Field(None, pattern=r"^[MF]$", example="M")
     dob: Optional[date] = Field(None, example="1995-06-21")

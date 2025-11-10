@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.api.dependecies.auth import get_current_user
 from app.api.dependecies.get_db_sessions import get_postgres as get_db
+from app.api.dependecies.get_db_sessions import get_redis_client
 from app.core.exceptions import InternalServerErrorException
 from app.models.enums import ReportFormatEnum, ReportStatusEnum, ReportTypeEnum
 from app.models.user_management_models import User
@@ -33,8 +34,8 @@ router = APIRouter(prefix="/reports", tags=["Report Management"])
 
 def get_report_service(db: Session = Depends(get_db)) -> ReportService:
     """Dependency to get report service"""
-    cache_service = CacheService()
-    file_service = FileService(db)
+    cache_service = CacheService(Depends(get_redis_client))
+    file_service = FileService()
     mail_service = MailService()
     return ReportService(db, cache_service, file_service, mail_service)
 

@@ -14,6 +14,8 @@ from fastapi import (
     Security,
 )
 from fastapi.responses import JSONResponse
+from fastapi_limiter import FastAPILimiter
+from fastapi_limiter.depends import RateLimiter
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
@@ -33,7 +35,11 @@ from app.schemas.user_schemas import (
 )
 from app.services.auth_management.auth_service import AuthService
 
-router = APIRouter(prefix="/auth", tags=["Auth"])
+router = APIRouter(
+    prefix="/auth",
+    tags=["Auth"],
+    dependencies=[Depends(RateLimiter(times=100, seconds=60))],
+)
 auth = AuthService()
 
 
@@ -78,20 +84,17 @@ async def onboard_employee(
     return result
 
 
-@router.post(
-    "/admin-logout", description="Logout admin and revoke the active session/token"
-)
+@router.post("/logout", description="Logout users revoke the active session/token")
 async def admin_logout(
     request: Request,
+    token: str = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_postgres),
     current_user: User = Security(get_current_user, scopes=["auth:write"]),
 ):
-    if current_user.role_id == 1:
-        raise HTTPException(status_code=403, detail="Forbidden Access")
-    access_token = request.cookies.get("access_token")
-    if not access_token:
-        raise HTTPException(status_code=404, detail="access_token not found")
-    result = await auth.LOGOUT(access_token=access_token, db=db)
+    refresh_token = request.cookies.get("refresh_token")
+    if not refresh_token:
+        raise HTTPException(status_code=404, detail="refresh_token not found")
+    result = await auth.LOGOUT(access_token=token, db=db, refresh_token=refresh_token)
     return result
 
 
@@ -100,9 +103,9 @@ async def admin_logout(
     description="Initiate admin password reset by sending OTP/link",
 )
 async def admin_forgot_password(
-    data: ForgotPasswordRequest,
+    background_tasks: BackgroundTasks,
+    data: ForgotPasswordRequest = Body(...),
     db: AsyncSession = Depends(get_postgres),
-    background_tasks=BackgroundTasks(),
 ):
     result = await auth.FORGOT_PASSWORD(
         email=data.email, db=db, background_tasks=background_tasks
@@ -111,8 +114,20 @@ async def admin_forgot_password(
 
 
 @router.post("/admin-change-password", description="request for changing the password")
-async def admin_change_password():
-    pass
+async def admin_change_password(
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_postgres),
+    current_user: User = Security(get_current_user, scopes=["auth:write"]),
+    data: ForgotPasswordRequest = Body(...),
+):
+    result = await auth.CHANGE_PASSWORD(
+        db=db,
+        email=data.email,
+        background_tasks=background_tasks,
+        role_id=current_user.role_id,
+        user_id=current_user.user_id,
+    )
+    return result
 
 
 @router.post("/reset-password", description="Reset password using a valid reset token")

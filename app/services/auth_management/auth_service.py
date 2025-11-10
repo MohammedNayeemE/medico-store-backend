@@ -1,6 +1,6 @@
 import random
 import uuid
-from datetime import datetime, datetime_CAPI, timedelta
+from datetime import datetime, datetime_CAPI, timedelta, timezone
 from typing import Tuple
 
 import httpx
@@ -17,6 +17,11 @@ from twilio.rest import Client
 
 from app.api.dependecies.get_db_sessions import get_postgres
 from app.core.config import settings
+from app.core.exceptions import (
+    BadRequestException,
+    ForbiddenException,
+    NotFoundException,
+)
 from app.models.user_management_models import (
     PasswordReset,
     RevokedToken,
@@ -70,7 +75,7 @@ class AuthService:
     async def create_refresh_token(self, user: User) -> Tuple[str, str, datetime]:
         jti = str(uuid.uuid4())
         expiration_dt = datetime.utcnow() + timedelta(
-            minutes=self.REFRESH_TOKEN_EXPIRE_DAYS
+            hours=self.REFRESH_TOKEN_EXPIRE_DAYS
         )
         payload = {
             "sub": str(user.user_id),
@@ -94,7 +99,9 @@ class AuthService:
     async def verify_captcha(
         self, captcha_token: str, min_score: float | None = None
     ) -> bool:
-        if self.CAPTCHA_BYPASS:
+        # print(type(self.CAPTCHA_BYPASS))
+        if self.CAPTCHA_BYPASS == True:
+            # print("log_here")
             if captcha_token == "false_token":
                 return False
             return True
@@ -205,6 +212,7 @@ class AuthService:
         self,
         access_token: str,
         db: AsyncSession,
+        refresh_token: str,
     ):
         try:
             try:
@@ -216,9 +224,19 @@ class AuthService:
                 jti = payload.get("jti")
             except JWTError:
                 raise HTTPException(status_code=401, detail="Invalid token")
+            try:
+                payload = await self.verify_token(
+                    token=refresh_token,
+                    secret_key=self.R_SECRET_KEY,
+                    algorithm=self.ALGORITHM,
+                )
+                r_jti = payload.get("jti")
+            except JWTError:
+                raise HTTPException(status_code=401, detail="Invalid token")
             await self.revoke_token(db=db, jti=jti)
+            await self.revoke_token(db=db, jti=r_jti)
             result = await db.execute(
-                select(Session).filter(Session.refresh_token_jti == jti)
+                select(Session).filter(Session.refresh_token_jti == r_jti)
             )
             session_obj = result.scalar_one_or_none()
             if not session_obj:
@@ -226,9 +244,6 @@ class AuthService:
             session_obj.is_revoked = True
             response = JSONResponse(
                 status_code=200, content={"msg": "logged out successfully"}
-            )
-            response.delete_cookie(
-                "access_token", httponly=True, secure=True, samesite="strict"
             )
             response.delete_cookie(
                 "refresh_token", httponly=True, secure=True, samesite="strict"
@@ -396,7 +411,7 @@ class AuthService:
             new_user = User(
                 email=admin_data.email,
                 password_hash=self.hash_password(admin_data.password),
-                role_id=admin_data.role_id,
+                role_id=2,
             )
             db.add(new_user)
             await db.commit()
@@ -475,6 +490,55 @@ class AuthService:
                 status_code=500, detail="Internal server error: forgot_password"
             )
 
+    async def CHANGE_PASSWORD(
+        self,
+        email: str,
+        db: AsyncSession,
+        background_tasks: BackgroundTasks,
+        role_id: int,
+        user_id: int,
+    ):
+        try:
+            if role_id == 1:
+                raise ForbiddenException("forbidden access")
+            result = await db.execute(select(User).filter(User.email == email))
+            user = result.scalar_one_or_none()
+            if not user:
+                raise NotFoundException("user not found")
+            if user.user_id != user_id:
+                raise ForbiddenException("forbidden acess")
+            reset_token = str(uuid.uuid4())
+            expires_at = datetime.utcnow() + timedelta(
+                minutes=self.PASSWORD_RESET_EXPIRE_MINUTES
+            )
+            reset_entry = PasswordReset(
+                user_id=user.user_id,
+                token=reset_token,
+                expires_at=expires_at,
+            )
+            db.add(reset_entry)
+            await db.commit()
+            await db.refresh(reset_entry)
+            link: str = (
+                f"http://localhost:8000/api/v1/reset-passoword?token={reset_token}"
+            )
+            reset_link = (
+                f"https://your-frontend-domain.com/reset-password?token={reset_token}"
+            )
+            return {
+                "message": "PasswordReset link has been sent your mail",
+                "reset_link": reset_link,
+            }
+            background_tasks.add_task(self.mail_service.SEND_RESET_TOKEN, email, link)
+        except (NotFoundException, ForbiddenException) as e:
+            raise
+        except Exception as e:
+            print(f"[change_password] error: {e}")
+            await db.rollback()
+            raise HTTPException(
+                status_code=500, detail="Internal server error: change_password"
+            )
+
     async def RESET_PASSWORD(self, token: str, new_password: str, db: AsyncSession):
         try:
             result = await db.execute(
@@ -520,7 +584,7 @@ class AuthService:
             if not refresh_token:
                 raise HTTPException(status_code=401, detail="missing refresh token")
             try:
-                payload = self.verify_token(
+                payload = await self.verify_token(
                     token=refresh_token,
                     secret_key=self.R_SECRET_KEY,
                     algorithm=self.ALGORITHM,
@@ -528,7 +592,8 @@ class AuthService:
                 jti = payload.get("jti")
             except JWTError:
                 raise HTTPException(status_code=401, detail="incalid token")
-            if not await self.is_token_revoked(db=db, jti=jti):
+            # print(jti)
+            if await self.is_token_revoked(db=db, jti=jti):
                 raise HTTPException(
                     status_code=401, detail="token is revoked pls log in"
                 )
@@ -540,20 +605,21 @@ class AuthService:
                 raise HTTPException(
                     status_code=401, detail="the session has already expired"
                 )
-            if session_obj.expires_at < datetime.utcnow():
+            print("=========================")
+            print(session_obj.expires_at, datetime.now(timezone.utc))
+            if session_obj.expires_at < datetime.now(timezone.utc):
                 raise HTTPException(
                     status_code=401, detail="the session has already expired"
                 )
-            result = await db.execute(
-                select(User).filter(User.user_id == payload.get("user_id"))
-            )
+            user_id = int(payload.get("sub"))
+            result = await db.execute(select(User).filter(User.user_id == user_id))
             user_obj = result.scalar_one_or_none()
             if not user_obj:
                 raise HTTPException(status_code=404, detail="user id not found")
             new_refresh_token, new_jti, expiry = await self.create_refresh_token(
                 user_obj
             )
-            new_access_token = self.create_access_token(user_obj)
+            new_access_token = await self.create_access_token(user_obj)
             await self.revoke_token(db=db, jti=jti)
             session_obj.is_revoked = True
             user_agent = request.headers.get("user-agent", "unknown")
@@ -566,6 +632,7 @@ class AuthService:
                 ip_address=client_ip,
                 expires_at=expiry,
             )
+            db.add(new_session)
             response = JSONResponse(
                 status_code=200,
                 content={
@@ -581,7 +648,6 @@ class AuthService:
                 secure=True,
                 samesite="strict",
                 max_age=self.ACCESS_TOKEN_EXPIRE_MINUTES * 24 * 60,
-                path="/auth/refresh",
             )
             await db.commit()
             return response

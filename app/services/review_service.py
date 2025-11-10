@@ -147,7 +147,7 @@ class ReviewService:
 
     async def GET_REVIEWS_BY_USER(self, db: AsyncSession, user_id: int, role_id: int):
         try:
-            if role_id == 1:
+            if role_id != 1:
                 raise HTTPException(status_code=404, detail="Forbidden Access")
             reviews_q = await db.execute(
                 select(Review).filter(

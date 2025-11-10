@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.api.dependecies.get_db_sessions import get_postgres
+from app.api.dependecies.get_db_sessions import get_postgres, get_redis_client
 from app.core.config import settings
 from app.core.database import async_session
 from app.models.user_management_models import (

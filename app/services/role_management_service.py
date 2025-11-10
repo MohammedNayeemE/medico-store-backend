@@ -65,9 +65,7 @@ class RoleManagementService:
                 db.add(role_perm_link)
             await db.commit()
             await db.refresh(role)
-            
-            # Audit logging
-            if mongo_db:
+            if mongo_db is not None:
                 audit_service = AuditLogService(mongo_db)
                 await audit_service.LOG_ACTION(
                     actor_id=actor_id,
@@ -84,11 +82,9 @@ class RoleManagementService:
                     user_agent=user_agent,
                     status="SUCCESS",
                 )
-            
             return role
         except HTTPException:
-            # Log failure
-            if mongo_db:
+            if mongo_db is not None:
                 audit_service = AuditLogService(mongo_db)
                 await audit_service.LOG_ACTION(
                     actor_id=actor_id,
@@ -104,7 +100,7 @@ class RoleManagementService:
         except Exception as e:
             await db.rollback()
             # Log failure
-            if mongo_db:
+            if mongo_db is not None:
                 audit_service = AuditLogService(mongo_db)
                 await audit_service.LOG_ACTION(
                     actor_id=actor_id,
@@ -145,9 +141,7 @@ class RoleManagementService:
             roles = result.scalars().all()
             if not roles:
                 raise HTTPException(status_code=404, detail="No roles found")
-            
-            # Audit logging
-            if mongo_db:
+            if mongo_db is not None:
                 audit_service = AuditLogService(mongo_db)
                 await audit_service.LOG_ACTION(
                     actor_id=actor_id,
@@ -158,11 +152,11 @@ class RoleManagementService:
                     user_agent=user_agent,
                     status="SUCCESS",
                 )
-            
+
             return roles
         except HTTPException:
             # Log failure
-            if mongo_db:
+            if mongo_db is not None:
                 audit_service = AuditLogService(mongo_db)
                 await audit_service.LOG_ACTION(
                     actor_id=actor_id,
@@ -175,8 +169,7 @@ class RoleManagementService:
                 )
             raise
         except Exception as e:
-            # Log failure
-            if mongo_db:
+            if mongo_db is not None:
                 audit_service = AuditLogService(mongo_db)
                 await audit_service.LOG_ACTION(
                     actor_id=actor_id,
@@ -205,14 +198,12 @@ class RoleManagementService:
         user_agent: Optional[str] = None,
     ) -> Role:
         try:
-            # Get old data before update
             old_role_result = await db.execute(
                 select(Role).filter(Role.role_id == role_id)
             )
             old_role = old_role_result.scalar_one_or_none()
             old_data = None
             if old_role:
-                # Get old permissions
                 old_perms_result = await db.execute(
                     select(Permission.name)
                     .join(
@@ -227,7 +218,6 @@ class RoleManagementService:
                     "description": old_role.description,
                     "permissions": old_permissions,
                 }
-            
             if not old_role:
                 raise HTTPException(status_code=404, detail="Role not found")
             if role_data.name:
@@ -262,9 +252,7 @@ class RoleManagementService:
             )
             await db.commit()
             await db.refresh(old_role)
-            
-            # Audit logging
-            if mongo_db:
+            if mongo_db is not None:
                 audit_service = AuditLogService(mongo_db)
                 await audit_service.LOG_ACTION(
                     actor_id=actor_id,
@@ -282,11 +270,9 @@ class RoleManagementService:
                     user_agent=user_agent,
                     status="SUCCESS",
                 )
-            
             return old_role
         except HTTPException:
-            # Log failure
-            if mongo_db:
+            if mongo_db is not None:
                 audit_service = AuditLogService(mongo_db)
                 await audit_service.LOG_ACTION(
                     actor_id=actor_id,
@@ -301,8 +287,7 @@ class RoleManagementService:
                 )
             raise
         except Exception as e:
-            # Log failure
-            if mongo_db:
+            if mongo_db is not None:
                 audit_service = AuditLogService(mongo_db)
                 await audit_service.LOG_ACTION(
                     actor_id=actor_id,
@@ -353,9 +338,7 @@ class RoleManagementService:
             background_tasks.add_task(
                 self.mail_service.SEND_ONBOARDING_MAIL, employeeData.email, magic_link
             )
-            
-            # Audit logging
-            if mongo_db:
+            if mongo_db is not None:
                 audit_service = AuditLogService(mongo_db)
                 await audit_service.LOG_ACTION(
                     actor_id=actor_id,
@@ -371,11 +354,9 @@ class RoleManagementService:
                     user_agent=user_agent,
                     status="SUCCESS",
                 )
-            
             return {"msg": "Employee added and onboarding mail sent"}
         except HTTPException:
-            # Log failure
-            if mongo_db:
+            if mongo_db is not None:
                 audit_service = AuditLogService(mongo_db)
                 await audit_service.LOG_ACTION(
                     actor_id=actor_id,
@@ -393,7 +374,7 @@ class RoleManagementService:
             raise
         except Exception as e:
             # Log failure
-            if mongo_db:
+            if mongo_db is not None:
                 audit_service = AuditLogService(mongo_db)
                 await audit_service.LOG_ACTION(
                     actor_id=actor_id,
@@ -428,7 +409,7 @@ class RoleManagementService:
         try:
             query = (
                 select(User)
-                .filter(User.is_deleted == False, User.role_id != 3)
+                .filter(User.is_deleted == False, User.role_id != 1)
                 .offset(skip)
                 .limit(limit)
             )
@@ -450,9 +431,7 @@ class RoleManagementService:
                         "is_active": emp.is_active,
                     }
                 )
-            
-            # Audit logging
-            if mongo_db:
+            if mongo_db is not None:
                 audit_service = AuditLogService(mongo_db)
                 await audit_service.LOG_ACTION(
                     actor_id=actor_id,
@@ -463,11 +442,9 @@ class RoleManagementService:
                     user_agent=user_agent,
                     status="SUCCESS",
                 )
-            
             return response
         except HTTPException:
-            # Log failure
-            if mongo_db:
+            if mongo_db is not None:
                 audit_service = AuditLogService(mongo_db)
                 await audit_service.LOG_ACTION(
                     actor_id=actor_id,
@@ -481,7 +458,7 @@ class RoleManagementService:
             raise
         except Exception as e:
             # Log failure
-            if mongo_db:
+            if mongo_db is not None:
                 audit_service = AuditLogService(mongo_db)
                 await audit_service.LOG_ACTION(
                     actor_id=actor_id,
@@ -526,13 +503,10 @@ class RoleManagementService:
                 raise HTTPException(
                     status_code=404, detail="No permissions found for this role"
                 )
-            
             response = [
                 {"permission_id": p.permission_id, "name": p.name} for p in permissions
             ]
-            
-            # Audit logging
-            if mongo_db:
+            if mongo_db is not None:
                 audit_service = AuditLogService(mongo_db)
                 await audit_service.LOG_ACTION(
                     actor_id=actor_id,
@@ -544,11 +518,9 @@ class RoleManagementService:
                     user_agent=user_agent,
                     status="SUCCESS",
                 )
-            
             return response
         except HTTPException:
-            # Log failure
-            if mongo_db:
+            if mongo_db is not None:
                 audit_service = AuditLogService(mongo_db)
                 await audit_service.LOG_ACTION(
                     actor_id=actor_id,
@@ -562,8 +534,7 @@ class RoleManagementService:
                 )
             raise
         except Exception as e:
-            # Log failure
-            if mongo_db:
+            if mongo_db is not None:
                 audit_service = AuditLogService(mongo_db)
                 await audit_service.LOG_ACTION(
                     actor_id=actor_id,

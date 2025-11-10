@@ -5,9 +5,15 @@ from fastapi import HTTPException
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import BadRequestException, NotFoundException
-from app.models.inventory_management_models import Cart, CartItem, Medicine
+from app.models.inventory_management_models import (
+    Cart,
+    CartItem,
+    Medicine,
+    MedicineBatch,
+)
 from app.models.order_management_models import Coupon, Discount, DiscountMedicine
 from app.schemas.cart_schemas import CartItemCreate, CartItemUpdate
 
@@ -19,7 +25,9 @@ class CartService:
     async def GET_USER_CART(self, db: AsyncSession, user_id: int) -> Cart:
         try:
             result = await db.execute(
-                select(Cart).filter(
+                select(Cart)
+                .options(selectinload(Cart.cart_items).selectinload(CartItem.medicine))
+                .filter(
                     Cart.customer_id == user_id,
                     Cart.is_deleted == False,
                 )
@@ -218,7 +226,20 @@ class CartService:
         discounted_items = []
         for item in cart.cart_items:
             medicine = await db.get(Medicine, item.medicine_id)
-            price = Decimal(medicine.price)
+            batch_q = await db.execute(
+                select(MedicineBatch)
+                .filter(
+                    MedicineBatch.medicine_id == medicine.medicine_id,
+                    MedicineBatch.is_deleted == False,
+                )
+                .order_by(MedicineBatch.expiry_date.asc())
+                .limit(1)
+            )
+            batch = batch_q.scalar_one_or_none()
+            if not batch:
+                print(f"[Warning] No batch found for medicine {medicine.medicine_name}")
+                continue
+            price = Decimal(batch.selling_price)
             item_total = price * item.quantity
             discount_q = await db.execute(
                 select(Discount)
@@ -246,8 +267,9 @@ class CartService:
             discounted_items.append(
                 {
                     "medicine_id": medicine.medicine_id,
-                    "medicine_name": medicine.name,
+                    "medicine_name": medicine.medicine_name,
                     "quantity": item.quantity,
+                    "unit_price": float(price),
                     "original_price": float(item_total),
                     "discount_applied": float(discount_value),
                     "final_price": float(discounted_price),

@@ -234,8 +234,7 @@ async def login_swagger_customer(
             httponly=True,
             secure=True,
             samesite="strict",
-            max_age=auth_manager.ACCESS_TOKEN_EXPIRE_MINUTES * 24 * 60,
-            path="/auth/refresh",
+            max_age=auth_manager.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60,
         )
         db.add(session)
         await db.commit()

@@ -10,7 +10,12 @@ from app.core.database import bucket
 from app.models.enums import OrderStatusEnum
 from app.models.user_management_models import User
 from app.schemas.inventory_schemas import VerifyPrescription
-from app.schemas.order_schemas import OrderCreate, OrderItemCreate, OrderItemUpdate
+from app.schemas.order_schemas import (
+    OrderCreate,
+    OrderDetailsResponse,
+    OrderItemCreate,
+    OrderItemUpdate,
+)
 from app.services.order_management import invoice_service
 from app.services.order_management.invoice_service import InvoiceService
 from app.services.order_management.order_management_service import OrderService
@@ -27,6 +32,15 @@ async def create_order(
     current_user=Security(get_current_user, scopes=["order:write"]),
 ):
     result = await order_manager.CREATE_ORDER(db=db, order_data=order_data)
+    return result
+
+
+@router.get("/", description="List All the orders")
+async def get_all_orders(
+    db: AsyncSession = Depends(get_postgres),
+    current_user: User = Security(get_current_user, scopes=["order:read"]),
+):
+    result = await order_manager.GET_ALL_ORDERS(db=db, role_id=current_user.role_id)
     return result
 
 
@@ -47,7 +61,11 @@ async def get_customer_orders(
     return result
 
 
-@router.get("/{order_id}", description="Get order details (items, payment, invoice)")
+@router.get(
+    "/{order_id}",
+    description="Get order details (items, payment, invoice)",
+    response_model=OrderDetailsResponse,
+)
 async def get_order_details(
     order_id: int = Path(...),
     db: AsyncSession = Depends(get_postgres),
