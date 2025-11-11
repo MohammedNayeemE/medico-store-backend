@@ -31,6 +31,18 @@ async def list_discount_types(
     skip: int = Query(0, ge=0),
     limit: int = Query(10, le=100),
 ):
+    """
+    Get paginated list of discount types.
+    
+    Args:
+        db: Database session
+        current_user: Authenticated user (requires "discount:read" permission)
+        skip: Pagination offset
+        limit: Pagination limit (max 100)
+    
+    Returns:
+        List of discount types
+    """
     result = await discount_manager.LIST_DISCOUNT_TYPE(db=db, skip=skip, limit=limit)
     return result
 
@@ -41,6 +53,17 @@ async def create_discount_type(
     db: AsyncSession = Depends(get_postgres),
     current_user=Security(get_current_user, scopes=["discount:write"]),
 ):
+    """
+    Create a new discount type (e.g., percentage, flat amount).
+    
+    Args:
+        discount_type: Discount type creation data
+        db: Database session
+        current_user: Authenticated user (requires "discount:write" permission)
+    
+    Returns:
+        Created discount type object
+    """
     result = await discount_manager.CREATE_DISCOUNT_TYPE(
         db=db, discount_type_data=discount_type
     )
@@ -83,6 +106,19 @@ async def list_discounts(
     skip: int = Query(0, ge=0),
     limit: int = Query(10, le=100),
 ):
+    """
+    Get paginated list of discounts with optional active status filter.
+    
+    Args:
+        is_active: Optional filter by active status
+        db: Database session
+        current_user: Authenticated user (requires "discount:read" permission)
+        skip: Pagination offset
+        limit: Pagination limit (max 100)
+    
+    Returns:
+        List of discounts
+    """
     result = await discount_manager.LIST_ALL_DISCOUNTS(
         db=db, skip=skip, limit=limit, is_active=is_active
     )
@@ -95,6 +131,17 @@ async def create_discount(
     db: AsyncSession = Depends(get_postgres),
     current_user=Security(get_current_user, scopes=["discount:write"]),
 ):
+    """
+    Create a new discount with parameters and applicability rules.
+    
+    Args:
+        discount_data: Discount creation data (name, type, value, dates, etc.)
+        db: Database session
+        current_user: Authenticated user (requires "discount:write" permission)
+    
+    Returns:
+        Created discount object
+    """
     result = await discount_manager.CREATE_DISCOUNT(db=db, discount_data=discount_data)
     return result
 
@@ -274,6 +321,17 @@ async def create_coupon(
     db: AsyncSession = Depends(get_postgres),
     current_user=Security(get_current_user, scopes=["discount:write"]),
 ):
+    """
+    Create a new coupon code linked to a discount.
+    
+    Args:
+        coupon: Coupon creation data (code, discount_id, validity dates, usage limits)
+        db: Database session
+        current_user: Authenticated user (requires "discount:write" permission)
+    
+    Returns:
+        Created coupon object
+    """
     result = await discount_manager.CREATE_COUPON(db=db, data=coupon)
     return result
 

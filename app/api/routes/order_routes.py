@@ -31,6 +31,17 @@ async def create_order(
     db: AsyncSession = Depends(get_postgres),
     current_user=Security(get_current_user, scopes=["order:write"]),
 ):
+    """
+    Create a new order from cart items or request order.
+    
+    Args:
+        order_data: Order creation data with items and delivery details
+        db: Database session
+        current_user: Authenticated user (requires "order:write" permission)
+    
+    Returns:
+        Created order object with order ID and status
+    """
     result = await order_manager.CREATE_ORDER(db=db, order_data=order_data)
     return result
 
@@ -40,6 +51,16 @@ async def get_all_orders(
     db: AsyncSession = Depends(get_postgres),
     current_user: User = Security(get_current_user, scopes=["order:read"]),
 ):
+    """
+    Get all orders. Returns different results based on user role (admin sees all, customer sees own).
+    
+    Args:
+        db: Database session
+        current_user: Authenticated user (requires "order:read" permission)
+    
+    Returns:
+        List of orders filtered by user role
+    """
     result = await order_manager.GET_ALL_ORDERS(db=db, role_id=current_user.role_id)
     return result
 
@@ -51,6 +72,18 @@ async def get_customer_orders(
     db: AsyncSession = Depends(get_postgres),
     current_user: User = Security(get_current_user, scopes=["order:read"]),
 ):
+    """
+    Get paginated list of orders for the authenticated customer.
+    
+    Args:
+        skip: Number of records to skip (pagination offset)
+        limit: Maximum number of records to return (pagination limit, max 100)
+        db: Database session
+        current_user: Authenticated user (requires "order:read" permission)
+    
+    Returns:
+        Paginated list of customer orders
+    """
     result = await order_manager.GET_CUSTOMER_ORDERS(
         db=db,
         customer_id=current_user.user_id,
@@ -71,6 +104,17 @@ async def get_order_details(
     db: AsyncSession = Depends(get_postgres),
     current_user=Security(get_current_user, scopes=["order:read"]),
 ):
+    """
+    Get detailed information about a specific order including items, payment, and invoice.
+    
+    Args:
+        order_id: Unique identifier of the order
+        db: Database session
+        current_user: Authenticated user (requires "order:read" permission)
+    
+    Returns:
+        OrderDetailsResponse with order items, payment info, and invoice details
+    """
     result = await order_manager.GET_ORDER_DETAILS(db=db, order_id=order_id)
     return result
 
@@ -82,6 +126,18 @@ async def update_order_status(
     db: AsyncSession = Depends(get_postgres),
     current_user=Security(get_current_user, scopes=["order:write"]),
 ):
+    """
+    Update the status of an order (e.g., pending, confirmed, shipped, delivered, cancelled).
+    
+    Args:
+        order_id: Unique identifier of the order to update
+        status: New order status (OrderStatusEnum)
+        db: Database session
+        current_user: Authenticated user (requires "order:write" permission)
+    
+    Returns:
+        Updated order object with new status
+    """
     result = await order_manager.UPDATE_ORDER_STATUS(
         db=db, order_id=order_id, new_status=status
     )
@@ -96,6 +152,17 @@ async def soft_delete_order(
     db: AsyncSession = Depends(get_postgres),
     current_user: User = Security(get_current_user, scopes=["order:delete"]),
 ):
+    """
+    Soft delete an order (mark as deleted without permanent removal).
+    
+    Args:
+        order_id: Unique identifier of the order to delete
+        db: Database session
+        current_user: Authenticated user (requires "order:delete" permission)
+    
+    Returns:
+        Success message confirming order deletion
+    """
     result = await order_manager.SOFT_DELETE_ORDER(
         db=db, order_id=order_id, deleted_by=current_user.user_id
     )
@@ -111,6 +178,17 @@ async def get_order_items(
     db: AsyncSession = Depends(get_postgres),
     current_user=Security(get_current_user, scopes=["order:read"]),
 ):
+    """
+    Get all items in a specific order.
+    
+    Args:
+        order_id: Unique identifier of the order
+        db: Database session
+        current_user: Authenticated user (requires "order:read" permission)
+    
+    Returns:
+        List of order items with medicine details and quantities
+    """
     result = await order_manager.GET_ORDER_ITEMS(db=db, order_id=order_id)
     return result
 
@@ -139,6 +217,16 @@ async def get_customer_invoices(
     db: AsyncSession = Depends(get_postgres),
     current_user: User = Security(get_current_user, scopes=["order:read"]),
 ):
+    """
+    Get all invoices for the authenticated customer.
+    
+    Args:
+        db: Database session
+        current_user: Authenticated user (requires "order:read" permission)
+    
+    Returns:
+        List of invoices for the customer
+    """
     result = await invoice_manager.GET_CUSTOMER_INVOICES(
         db=db, customer_id=current_user.user_id, role_id=current_user.role_id
     )
@@ -154,6 +242,17 @@ async def get_invoice_details(
     db: AsyncSession = Depends(get_postgres),
     current_user=Security(get_current_user, scopes=["order:read"]),
 ):
+    """
+    Get detailed information about a specific invoice.
+    
+    Args:
+        invoice_id: Unique identifier of the invoice
+        db: Database session
+        current_user: Authenticated user (requires "order:read" permission)
+    
+    Returns:
+        Invoice details with order information, items, and payment status
+    """
     result = await invoice_manager.GET_INVOICE_DETAILS(db=db, invoice_id=invoice_id)
     return result
 
@@ -168,7 +267,17 @@ async def download_invoice_pdf(
     db: AsyncSession = Depends(get_postgres),
     current_user=Security(get_current_user, scopes=["order:read"]),
 ):
-    """Download the invoice PDF for the specified invoice_id."""
+    """
+    Download invoice as a PDF file.
+    
+    Args:
+        invoice_id: Unique identifier of the invoice
+        db: Database session
+        current_user: Authenticated user (requires "order:read" permission)
+    
+    Returns:
+        PDF file stream of the invoice
+    """
     pass
 
 

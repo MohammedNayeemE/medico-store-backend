@@ -12,6 +12,11 @@ from app.models.backup_models import Backup
 
 
 class BackupService:
+    """
+    Service class for managing database backups.
+    
+    Handles backup creation for PostgreSQL and MongoDB, backup restoration, and backup management.
+    """
     BACKUP_DIR = settings.BACKUP_DIR
 
     @classmethod
@@ -22,6 +27,18 @@ class BackupService:
         parts: Optional[List[str]] = None,
         postgres_tables: Optional[List[str]] = None,  # ⬅️ new argument
     ):
+        """
+        Create a backup of the database (PostgreSQL and/or MongoDB).
+        
+        Args:
+            db: Database session
+            backup_id: Backup record ID
+            parts: List of parts to backup (e.g., ["postgres", "mongo"])
+            postgres_tables: Optional list of specific PostgreSQL tables to backup
+        
+        Returns:
+            Backup status and file paths
+        """
         backup = await db.get(Backup, backup_id)
         backup.status = "running"
         await db.commit()

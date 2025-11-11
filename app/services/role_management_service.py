@@ -15,6 +15,11 @@ from app.services.mail_service import MailService
 
 
 class RoleManagementService:
+    """
+    Service class for managing roles, permissions, and employee onboarding.
+    
+    Handles role creation, permission assignment, employee creation, and onboarding token generation.
+    """
     def __init__(self) -> None:
         self.A_SECRET_KEY = settings.ACCESS_SECRET_TOKEN
         self.ALGORITHM = settings.ALGORITHM
@@ -22,6 +27,15 @@ class RoleManagementService:
         self.background_tasks = BackgroundTasks()
 
     def create_onboarding_token(self, email: str):
+        """
+        Create an onboarding token for employee email verification.
+        
+        Args:
+            email: Employee email address
+        
+        Returns:
+            JWT token string for onboarding
+        """
         payload = {
             "sub": email,
             "type": "onboarding",
@@ -39,6 +53,24 @@ class RoleManagementService:
         ip_address: Optional[str] = None,
         user_agent: Optional[str] = None,
     ) -> Role:
+        """
+        Create a new role with permissions.
+        
+        Args:
+            db: Database session
+            role_data: Role creation data (name, description, permissions)
+            mongo_db: Optional MongoDB database for audit logging
+            actor_id: Optional ID of user creating the role
+            actor_role: Optional role of user creating the role
+            ip_address: Optional IP address for audit logging
+            user_agent: Optional user agent for audit logging
+        
+        Returns:
+            Created Role object
+        
+        Raises:
+            HTTPException (400): If role name already exists
+        """
         try:
             result = await db.execute(select(Role).filter(Role.name == role_data.name))
             existing_role = result.scalar_one_or_none()

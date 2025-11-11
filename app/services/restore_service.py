@@ -12,6 +12,11 @@ from app.models.backup_models import Backup, Restore
 
 
 class RestoreService:
+    """
+    Service class for restoring database backups.
+    
+    Handles backup restoration for PostgreSQL and MongoDB from backup files.
+    """
     RESTORE_DIR = settings.RESTORE_DIR  # e.g., /var/tmp/epharmacy_restore
 
     @classmethod
@@ -19,7 +24,18 @@ class RestoreService:
         cls, db: AsyncSession, backup_id: int, restored_by: str = "system"
     ):
         """
-        Perform a restore from an existing backup and log the process in the restores table.
+        Restore database from an existing backup.
+        
+        Args:
+            db: Database session
+            backup_id: Backup record ID to restore from
+            restored_by: User or system identifier performing the restore
+        
+        Returns:
+            Restore status and results
+        
+        Raises:
+            ValueError: If backup not found or failed
         """
         # 1️⃣ Validate the backup
         backup = await db.get(Backup, backup_id)
@@ -36,7 +52,6 @@ class RestoreService:
         db.add(restore)
         await db.commit()
         await db.refresh(restore)
-
         os.makedirs(cls.RESTORE_DIR, exist_ok=True)
         tar_path = backup.artifact_path
 

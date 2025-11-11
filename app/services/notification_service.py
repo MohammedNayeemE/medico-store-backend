@@ -13,6 +13,11 @@ from app.schemas.notification_schemas import NotificationCreate
 
 
 class NotificationService:
+    """
+    Service class for managing notifications.
+    
+    Handles notification creation, retrieval, and status updates for users.
+    """
     def __init__(self) -> None:
         pass
 
@@ -23,6 +28,21 @@ class NotificationService:
         notification_content: NotificationCreate,
         by_user_id: Optional[int] = None,
     ):
+        """
+        Create and send a notification to a user.
+        
+        Args:
+            db: Database session
+            to_user_id: ID of the user to send notification to
+            notification_content: Notification content (type, title, message)
+            by_user_id: Optional ID of the user who triggered the notification
+        
+        Returns:
+            Success message
+        
+        Raises:
+            NotFoundException: If user not found
+        """
         try:
             result = await db.execute(select(User).filter(User.user_id == to_user_id))
             user_obj = result.scalar_one_or_none()

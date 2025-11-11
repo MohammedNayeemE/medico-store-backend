@@ -39,6 +39,13 @@ from app.services.mail_service import MailService
 
 
 class AuthService:
+    """
+    Service class for managing authentication and authorization operations.
+    
+    This service handles user authentication, token management, password operations,
+    and session management. It provides methods for login, registration, token
+    creation/validation, password hashing/verification, and OTP generation.
+    """
     def __init__(self) -> None:
         self.A_SECRET_KEY = settings.ACCESS_SECRET_TOKEN
         self.R_SECRET_KEY = settings.REFRESH_SECRET_TOKEN
@@ -52,16 +59,68 @@ class AuthService:
         self.mail_service = MailService()
 
     def verify_password(self, plain: str, hashed: str) -> bool:
+        """
+        Verify a plain text password against a hashed password.
+        
+        Args:
+            plain (str): The plain text password to verify.
+            hashed (str): The hashed password to verify against.
+        
+        Returns:
+            bool: True if the password matches, False otherwise.
+        """
         return self.pwd_context.verify(plain, hashed)
 
     def hash_password(self, password: str) -> str:
+        """
+        Hash a plain text password using Argon2 algorithm.
+        
+        Args:
+            password (str): The plain text password to hash.
+        
+        Returns:
+            str: The hashed password string.
+        """
         return self.pwd_context.hash(password)
 
     async def verify_token(self, token: str, secret_key: str, algorithm: str):
+        """
+        Verify and decode a JWT token.
+        
+        Args:
+            token (str): The JWT token to verify.
+            secret_key (str): The secret key used to sign the token.
+            algorithm (str): The algorithm used to sign the token.
+        
+        Returns:
+            dict: The decoded token payload.
+        
+        Raises:
+            JWTError: If the token is invalid, expired, or malformed.
+        """
         payload = jwt.decode(token, secret_key, algorithms=[algorithm])
         return payload
 
     async def create_access_token(self, user: User) -> str:
+        """
+        Create a JWT access token for a user.
+        
+        This method generates a short-lived access token that can be used for API
+        authentication. The token includes the user ID, role ID, expiration time,
+        and a unique JWT ID (jti) for token revocation.
+        
+        Args:
+            user (User): The user object for whom to create the access token.
+        
+        Returns:
+            str: The encoded JWT access token.
+        
+        Note:
+            - Token expiration is set based on ACCESS_TOKEN_EXPIRE_MINUTES
+            - Token includes user_id (sub), role_id, expiration (exp), and jti
+            - Token is signed using the access token secret key
+            - JTI (JWT ID) is used for token revocation
+        """
         jti = str(uuid.uuid4())
         payload = {
             "sub": str(user.user_id),
@@ -73,6 +132,29 @@ class AuthService:
         return jwt.encode(payload, self.A_SECRET_KEY, algorithm=self.ALGORITHM)
 
     async def create_refresh_token(self, user: User) -> Tuple[str, str, datetime]:
+        """
+        Create a JWT refresh token for a user.
+        
+        This method generates a long-lived refresh token that can be used to obtain
+        new access tokens. The token includes the user ID, role ID, expiration time,
+        and a unique JWT ID (jti) for token revocation and session management.
+        
+        Args:
+            user (User): The user object for whom to create the refresh token.
+        
+        Returns:
+            Tuple[str, str, datetime]: A tuple containing:
+                                      - encoded_jwt (str): The encoded JWT refresh token
+                                      - jti (str): The unique JWT ID for token revocation
+                                      - expiration_dt (datetime): The token expiration datetime
+        
+        Note:
+            - Token expiration is set based on REFRESH_TOKEN_EXPIRE_DAYS
+            - Token includes user_id (sub), role_id, expiration (exp), and jti
+            - Token is signed using the refresh token secret key
+            - JTI is used for token revocation and session management
+            - Refresh tokens have longer expiration than access tokens
+        """
         jti = str(uuid.uuid4())
         expiration_dt = datetime.utcnow() + timedelta(
             hours=self.REFRESH_TOKEN_EXPIRE_DAYS
@@ -87,10 +169,39 @@ class AuthService:
         return encoded_jwt, jti, expiration_dt
 
     async def is_token_revoked(self, db: AsyncSession, jti: str) -> bool:
+        """
+        Check if a token has been revoked.
+        
+        This method checks if a token's JWT ID (jti) exists in the revoked tokens
+        table, indicating that the token has been revoked and should not be accepted.
+        
+        Args:
+            db (AsyncSession): Database session for querying revoked tokens.
+            jti (str): The JWT ID (jti) of the token to check.
+        
+        Returns:
+            bool: True if the token is revoked, False otherwise.
+        """
         result = await db.execute(select(RevokedToken).where(RevokedToken.jti == jti))
         return result.scalar_one_or_none() is not None
 
     async def revoke_token(self, db: AsyncSession, jti: str):
+        """
+        Revoke a token by adding its JWT ID to the revoked tokens table.
+        
+        This method marks a token as revoked by adding its JWT ID (jti) to the
+        revoked tokens table. Once revoked, the token cannot be used for authentication.
+        If the token is already revoked, this method does nothing.
+        
+        Args:
+            db (AsyncSession): Database session for storing revoked token.
+            jti (str): The JWT ID (jti) of the token to revoke.
+        
+        Note:
+            - Only revokes the token if it's not already revoked
+            - Records the revocation timestamp
+            - Commits the revocation to the database
+        """
         if not await self.is_token_revoked(db, jti):
             revoked_at = datetime.utcnow()
             db.add(RevokedToken(jti=jti, revoked_at=revoked_at))

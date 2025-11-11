@@ -25,12 +25,28 @@ from app.schemas.discount_schemas import (
 
 
 class DiscountService:
+    """
+    Service class for managing discounts, coupons, and discount types.
+    
+    Handles discount creation, coupon management, and discount type operations.
+    """
     def __init__(self) -> None:
         pass
 
     async def LIST_DISCOUNT_TYPE(
         self, db: AsyncSession, skip: int = 0, limit: int = 10
     ):
+        """
+        Get paginated list of discount types.
+        
+        Args:
+            db: Database session
+            skip: Number of records to skip (pagination offset)
+            limit: Maximum number of records to return (pagination limit)
+        
+        Returns:
+            List of discount types
+        """
         try:
             result = await db.execute(
                 select(DiscountType)

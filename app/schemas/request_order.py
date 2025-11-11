@@ -16,7 +16,7 @@ class RequestOrderItemCreate(BaseModel):
     medicine_id: conint(gt=0) = Field(
         ..., example=101, description="Unique ID of the medicine being requested"
     )
-    quantity: conint(gt=0, le=1000) = Field(
+    quantity: conint(gt=0, le=30) = Field(
         ..., example=2, description="Quantity of medicine units requested"
     )
 

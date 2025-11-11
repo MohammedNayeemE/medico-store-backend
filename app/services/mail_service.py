@@ -8,6 +8,11 @@ from app.core.config import settings
 
 
 class MailService:
+    """
+    Service class for sending emails.
+    
+    Handles email sending for onboarding, password reset, notifications, and other communications.
+    """
     def __init__(self) -> None:
         self.mail_conf = ConnectionConfig(
             MAIL_USERNAME=settings.MAIL_USERNAME,
@@ -21,6 +26,13 @@ class MailService:
         )
 
     async def SEND_ONBOARDING_MAIL(self, email: str, magic_link: str):
+        """
+        Send onboarding email with magic link for employee password setup.
+        
+        Args:
+            email: Recipient email address
+            magic_link: Onboarding magic link URL
+        """
         message = MessageSchema(
             subject="Welcome to Medico Store your modern AI Powered E-Pharmacy Team",
             recipients=[email],
@@ -36,6 +48,13 @@ class MailService:
         await fast_mail_obj.send_message(message=message)
 
     async def SEND_RESET_TOKEN(self, email: str, link: str):
+        """
+        Send password reset email with reset link.
+        
+        Args:
+            email: Recipient email address
+            link: Password reset link URL
+        """
         message = MessageSchema(
             subject="Welcome to Medico Store your modern AI Powered E-Pharmacy Team",
             recipients=[email],

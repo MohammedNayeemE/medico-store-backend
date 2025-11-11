@@ -19,6 +19,11 @@ from app.services.mail_service import MailService
 
 
 class RequestMedicineService:
+    """
+    Service class for managing medicine requests.
+    
+    Handles medicine request creation, verification, and status updates.
+    """
     def __init__(self) -> None:
         self.mail_service = MailService()
 
@@ -29,6 +34,22 @@ class RequestMedicineService:
         role_id: int,
         request_data: MedicineRequestCreate,
     ):
+        """
+        Create a new medicine request (customers only).
+        
+        Args:
+            db: Database session
+            user_id: Customer user ID
+            role_id: User role ID (must be customer)
+            request_data: Medicine request data (medicine_id, note_text, note_img)
+        
+        Returns:
+            Created medicine request object
+        
+        Raises:
+            HTTPException (403): If user is not a customer
+            HTTPException (404): If requested medicine not found
+        """
         try:
             if role_id != 1:
                 raise HTTPException(status_code=403, detail="Forbidden Access")

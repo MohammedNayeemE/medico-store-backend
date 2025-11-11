@@ -24,12 +24,32 @@ from app.schemas.user_schemas import (
 
 
 class ProfileService:
+    """
+    Service class for managing user profiles (admin and customer).
+    
+    Handles profile operations including retrieval, updates, addresses, and family members.
+    """
     def __init__(self) -> None:
         pass
 
     async def GET_ADMIN_PROFILE(
         self, admin_id: int, db: AsyncSession, role_id: int
     ) -> ManagementProfile:
+        """
+        Get admin profile information.
+        
+        Args:
+            admin_id: Unique identifier of the admin user
+            db: Database session
+            role_id: Role ID of the user (must not be customer role)
+        
+        Returns:
+            ManagementProfile object with admin profile details
+        
+        Raises:
+            HTTPException (403): If user is a customer (role_id == 1)
+            HTTPException (404): If profile not found
+        """
         try:
             if role_id == 1:
                 raise HTTPException(status_code=403, detail="Forbidden Access")
@@ -57,6 +77,21 @@ class ProfileService:
         profile_data: AdminProfileCreate,
         role_id: int,
     ) -> ManagementProfile:
+        """
+        Update admin profile information. Creates profile if it doesn't exist.
+        
+        Args:
+            admin_id: Unique identifier of the admin user
+            db: Database session
+            profile_data: Admin profile data to update
+            role_id: Role ID of the user (must not be customer role)
+        
+        Returns:
+            Updated or created ManagementProfile object
+        
+        Raises:
+            HTTPException (403): If user is a customer (role_id == 1)
+        """
         try:
             if role_id == 1:
                 raise HTTPException(status_code=403, detail="Forbidden Access")
@@ -97,6 +132,21 @@ class ProfileService:
     async def GET_CUSTOMER_PROFILE(
         self, db: AsyncSession, customer_id: int, role_id: int
     ) -> CustomerProfile:
+        """
+        Get customer profile information.
+        
+        Args:
+            db: Database session
+            customer_id: Unique identifier of the customer user
+            role_id: Role ID of the user (must be customer role == 1)
+        
+        Returns:
+            CustomerProfile object with customer profile details
+        
+        Raises:
+            HTTPException (403): If user is not a customer (role_id != 1)
+            HTTPException (404): If profile not found
+        """
         try:
             if role_id != 1:
                 raise HTTPException(status_code=403, detail="Forbidden Access")
@@ -125,6 +175,21 @@ class ProfileService:
         profile_data: CustomerProfileCreate,
         role_id: int,
     ) -> CustomerProfile:
+        """
+        Update customer profile information. Creates profile if it doesn't exist.
+        
+        Args:
+            db: Database session
+            customer_id: Unique identifier of the customer user
+            profile_data: Customer profile data to update
+            role_id: Role ID of the user (must be customer role == 1)
+        
+        Returns:
+            Updated or created CustomerProfile object
+        
+        Raises:
+            HTTPException (403): If user is not a customer (role_id != 1)
+        """
         try:
             if role_id != 1:
                 raise HTTPException(status_code=403, detail="Forbidden Access")

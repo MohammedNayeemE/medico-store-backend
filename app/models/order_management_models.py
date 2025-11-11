@@ -104,6 +104,12 @@ class Order(Base):
     prescription_id = Column(
         Integer, ForeignKey("prescriptions.prescription_id", onupdate="CASCADE")
     )
+
+    # ✅ New field
+    delivery_address_id = Column(
+        Integer, ForeignKey("addresses.address_id", onupdate="CASCADE"), nullable=True
+    )
+
     status = Column(
         Enum(OrderStatusEnum, name="order_status_enum"),
         nullable=False,
@@ -120,7 +126,6 @@ class Order(Base):
     deleted_at = Column(TIMESTAMP(timezone=True))
     deleted_by = Column(Integer, ForeignKey("users.user_id", onupdate="CASCADE"))
 
-    # ✅ This is the only FK that connects Order → RequestOrder
     request_order_id = Column(
         Integer,
         ForeignKey("request_orders.request_order_id", onupdate="CASCADE"),
@@ -137,13 +142,12 @@ class Order(Base):
     order_items = relationship("OrderItem", back_populates="order")
     payments = relationship("Payment", back_populates="order")
     invoice = relationship("Invoice", back_populates="order", uselist=False)
-
-    # ✅ one-to-one relationship
     request_source = relationship(
-        "RequestOrder",
-        back_populates="final_order",
-        uselist=False,
+        "RequestOrder", back_populates="final_order", uselist=False
     )
+
+    # ✅ New relationship
+    delivery_address = relationship("Address")
 
 
 class OrderItem(Base):

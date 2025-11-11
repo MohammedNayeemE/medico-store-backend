@@ -31,6 +31,18 @@ async def upload_thumbnail_image(
     file: UploadFile = File(...),
     medicine_id: int = Path(...),
 ):
+    """
+    Upload a thumbnail image for a medicine.
+    
+    Args:
+        current_user: Authenticated user (requires "medicine:write" permission)
+        db: Database session
+        file: Image file to upload
+        medicine_id: Unique identifier of the medicine
+    
+    Returns:
+        Upload result with file URL and asset ID
+    """
     result = await inventory_manager.UPLOAD_MEDICINE_IMAGE(
         db=db,
         user_id=current_user.user_id,
@@ -51,6 +63,18 @@ async def upload_mulitple_images(
     files: List[UploadFile] = File(...),
     medicine_id: int = Path(...),
 ):
+    """
+    Upload multiple images for a medicine.
+    
+    Args:
+        current_user: Authenticated user (requires "medicine:write" permission)
+        db: Database session
+        files: List of image files to upload
+        medicine_id: Unique identifier of the medicine
+    
+    Returns:
+        Upload results with file URLs and asset IDs
+    """
     result = await inventory_manager.UPLOAD_MEDICINE_IMAGES(
         db=db,
         user_id=current_user.user_id,
@@ -73,6 +97,17 @@ async def create_medicine(
     db: AsyncSession = Depends(get_postgres),
     medicine_data: MedicineCreate = Body(...),
 ):
+    """
+    Create a new medicine entry in the inventory.
+    
+    Args:
+        current_user: Authenticated user (requires "medicine:write" permission)
+        db: Database session
+        medicine_data: Medicine creation data (name, description, price, etc.)
+    
+    Returns:
+        Created medicine object
+    """
     result = await inventory_manager.CREATE_MEDICINE(db=db, medicine_data=medicine_data)
     return result
 
@@ -83,6 +118,17 @@ async def bulk_upload_medicine(
     db: AsyncSession = Depends(get_postgres),
     medicine_data: UploadFile = File(...),
 ):
+    """
+    Bulk upload medicines from a file (CSV/Excel).
+    
+    Args:
+        current_user: Authenticated user (requires "medicine:write" permission)
+        db: Database session
+        medicine_data: File containing medicine data to upload
+    
+    Returns:
+        Bulk upload result with success count and errors
+    """
     result = await inventory_manager.BULK_UPLOAD_MEDICINES(db=db, file=medicine_data)
     return result
 
@@ -103,6 +149,24 @@ async def get_all_medicines(
     skip: int = Query(0, ge=0),
     limit: int = Query(10, le=100),
 ):
+    """
+    Get paginated list of medicines with optional filters (search, category, tag, price range).
+    
+    Args:
+        db: Database session
+        search: Search term for medicine name or description
+        category: Filter by category
+        tag: Filter by tag
+        min_price: Minimum price filter
+        max_price: Maximum price filter
+        sort_by: Sort field (price or name)
+        order: Sort order (asc or desc)
+        skip: Pagination offset
+        limit: Pagination limit (max 100)
+    
+    Returns:
+        Paginated list of medicines matching the filters
+    """
     result = await inventory_manager.GET_MEDICINES(
         db=db,
         name=search,
@@ -136,6 +200,17 @@ async def get_medicine_details(
     current_user=Security(get_current_user, scopes=["medicine:write"]),
     db: AsyncSession = Depends(get_postgres),
 ):
+    """
+    Get detailed information about a specific medicine (admin view).
+    
+    Args:
+        medicine_id: Unique identifier of the medicine
+        current_user: Authenticated user (requires "medicine:write" permission)
+        db: Database session
+    
+    Returns:
+        Medicine details with full information
+    """
     result = await inventory_manager.GET_MEDICINE_BY_ID(db=db, medicine_id=medicine_id)
     return result
 
@@ -147,6 +222,18 @@ async def update_medicine(
     db: AsyncSession = Depends(get_postgres),
     medicine_data: MedicineCreate = Body(...),
 ):
+    """
+    Update an existing medicine's information.
+    
+    Args:
+        medicine_id: Unique identifier of the medicine to update
+        current_user: Authenticated user (requires "medicine:write" permission)
+        db: Database session
+        medicine_data: Medicine data to update
+    
+    Returns:
+        Updated medicine object
+    """
     result = await inventory_manager.UPDATE_MEDICINE(
         db=db, medicine_id=medicine_id, medicine_data=medicine_data
     )
@@ -159,6 +246,17 @@ async def soft_delete_medicine(
     current_user: User = Security(get_current_user, scopes=["medicine:write"]),
     db: AsyncSession = Depends(get_postgres),
 ):
+    """
+    Soft delete a medicine (mark as deleted without permanent removal).
+    
+    Args:
+        medicine_id: Unique identifier of the medicine to delete
+        current_user: Authenticated user (requires "medicine:write" permission)
+        db: Database session
+    
+    Returns:
+        Success message confirming deletion
+    """
     result = await inventory_manager.SOFT_DELETE_MEDICINE(
         db=db, medicine_id=medicine_id, deleted_by=current_user.user_id
     )

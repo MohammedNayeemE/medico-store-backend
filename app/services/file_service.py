@@ -20,6 +20,11 @@ from app.models.user_management_models import FileAsset, User
 
 
 class FileService:
+    """
+    Service class for managing file uploads and storage.
+    
+    Handles file uploads to MongoDB GridFS, file asset management, and file retrieval.
+    """
     def __init__(self) -> None:
         pass
 
@@ -30,6 +35,21 @@ class FileService:
         file: UploadFile,
         user_id: int,
     ):
+        """
+        Upload a single file to MongoDB GridFS and create a file asset record.
+        
+        Args:
+            bucket: MongoDB GridFS bucket for file storage
+            db: Database session
+            file: File to upload
+            user_id: ID of the user uploading the file
+        
+        Returns:
+            Dictionary with asset_id and file information
+        
+        Raises:
+            NotFoundException: If user not found
+        """
         try:
             result = await db.execute(select(User).filter(User.user_id == user_id))
             user_obj = result.scalar_one_or_none()

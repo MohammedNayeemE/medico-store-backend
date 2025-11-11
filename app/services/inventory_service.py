@@ -25,6 +25,7 @@ from app.core.exceptions import (
     InternalServerErrorException,
     NotFoundException,
 )
+from app.models.enums import NotificationType
 from app.models.inventory_management_models import (
     Alternative,
     Category,
@@ -54,14 +55,19 @@ from app.schemas.inventory_schemas import (
     TagCreate,
     TagResponse,
 )
+from app.schemas.notification_schemas import NotificationCreate
 from app.services.cache_service import CacheService
 from app.services.file_service import FileService
 from app.services.notification_service import NotificationService
-from app.schemas.notification_schemas import NotificationCreate
-from app.models.enums import NotificationType
 
 
 class InventoryManagementService:
+    """
+    Service class for managing inventory, medicines, categories, batches, and related operations.
+
+    Handles medicine CRUD, batch management, category/tag operations, and inventory reallocation.
+    """
+
     def __init__(self) -> None:
         self.file_manager = FileService()
         self.ALLOWED_EXTENSIONS = {".csv", ".xlsx"}
@@ -72,9 +78,13 @@ class InventoryManagementService:
 
     async def _attempt_reallocation_for_medicine(self, medicine_id: int):
         """
-        Try to fulfill existing backorders for a given medicine when new stock arrives.
-        Automatically reallocates available stock to backordered items.
-        Runs in background (fresh DB session).
+        Attempt to fulfill backordered items when new stock arrives for a medicine.
+
+        Runs in background with a fresh database session to reallocate available stock
+        to existing backordered order items in FIFO order.
+
+        Args:
+            medicine_id: Unique identifier of the medicine to reallocate stock for
         """
         async with async_session() as db:  # ✅ create fresh session for background task
             try:
@@ -373,6 +383,10 @@ class InventoryManagementService:
                     status_code=400,
                     detail=f"Missing required columns: {', '.join(missing_cols)}",
                 )
+            DEFAULT_HSN_CODE = 3004
+            df["hsn_code"] = df["hsn_code"].apply(
+                lambda x: str(int(x)) if pd.notna(x) else DEFAULT_HSN_CODE
+            )
             inserted, errors = [], []
             for index, row in df.iterrows():
                 try:
@@ -383,7 +397,7 @@ class InventoryManagementService:
                         description=row["description"],
                         is_prescribed=bool(row["is_prescribed"]),
                         weight=row["weight"],
-                        hsn_code=str(row["hsn_code"]),
+                        hsn_code=3004,
                     )
                     db.add(med)
                     await db.flush()
@@ -791,9 +805,7 @@ class InventoryManagementService:
             if cached_data:
                 print("cache-hit: [light_medicines]")
                 return cached_data
-
             Batch = aliased(MedicineBatch)
-
             batch_subq = (
                 select(Batch.medicine_id, Batch.selling_price)
                 .where(
@@ -805,7 +817,6 @@ class InventoryManagementService:
                 .correlate(Medicine)
                 .subquery()
             )
-
             query = (
                 select(Medicine, batch_subq.c.selling_price, FileAsset.asset_id)
                 .join(MedicineImage, MedicineImage.medicine_id == Medicine.medicine_id)
@@ -815,7 +826,6 @@ class InventoryManagementService:
                 .offset(skip)
                 .limit(limit)
             )
-
             result = await db.execute(query)
             rows = result.all()
             response = [self._serialize_light_medicine(row) for row in rows]
@@ -1187,7 +1197,7 @@ class InventoryManagementService:
             background_tasks.add_task(
                 self._attempt_reallocation_for_medicine, medicine_id
             )
-            
+
             # Check if stock was low before and notify admin that stock has been replenished
             try:
                 # Get total available stock for this medicine
@@ -1198,11 +1208,11 @@ class InventoryManagementService:
                     )
                 ).filter(
                     MedicineBatch.medicine_id == medicine_id,
-                    MedicineBatch.is_deleted == False
+                    MedicineBatch.is_deleted == False,
                 )
                 stock_result = await db.execute(stock_query)
                 total_stock = stock_result.scalar() or 0
-                
+
                 # If stock is now above threshold (50), notify admin that stock has been replenished
                 if total_stock >= 50:
                     # Get medicine name
@@ -1211,33 +1221,39 @@ class InventoryManagementService:
                             Medicine.medicine_id == medicine_id
                         )
                     )
-                    medicine_name = med_result.scalar_one_or_none() or f"Medicine #{medicine_id}"
-                    
+                    medicine_name = (
+                        med_result.scalar_one_or_none() or f"Medicine #{medicine_id}"
+                    )
+
                     # Get admin users
                     admin_result = await db.execute(
-                        select(User.user_id).filter(
-                            User.role_id != 1, User.is_deleted == False, User.is_active == True
-                        ).limit(10)
+                        select(User.user_id)
+                        .filter(
+                            User.role_id != 1,
+                            User.is_deleted == False,
+                            User.is_active == True,
+                        )
+                        .limit(10)
                     )
                     admin_ids = [row[0] for row in admin_result.all()]
-                    
+
                     for admin_id in admin_ids:
                         notification_data = NotificationCreate(
                             type=NotificationType.info,
                             user_id=admin_id,
                             by_user_id=None,
                             title="Stock Replenished",
-                            message=f"Stock for {medicine_name} has been replenished. Current stock: {int(total_stock)} units."
+                            message=f"Stock for {medicine_name} has been replenished. Current stock: {int(total_stock)} units.",
                         )
                         await self.notification_service.PUSH_NOTIFICATIONS(
                             db=db,
                             to_user_id=admin_id,
                             notification_content=notification_data,
-                            by_user_id=None
+                            by_user_id=None,
                         )
             except Exception as e:
                 print(f"[CREATE_MEDICINE_BATCH] Failed to send notification: {e}")
-            
+
             return new_batch
         except HTTPException:
             raise
@@ -1349,18 +1365,22 @@ class InventoryManagementService:
             res = await db.execute(q)
             batches = res.scalars().all()
             print(f"[Inventory] Found {len(batches)} low-stock batches")
-            
+
             # Send notifications to admin about low stock items
             if batches:
                 try:
                     # Get admin users
                     admin_result = await db.execute(
-                        select(User.user_id).filter(
-                            User.role_id != 1, User.is_deleted == False, User.is_active == True
-                        ).limit(10)
+                        select(User.user_id)
+                        .filter(
+                            User.role_id != 1,
+                            User.is_deleted == False,
+                            User.is_active == True,
+                        )
+                        .limit(10)
                     )
                     admin_ids = [row[0] for row in admin_result.all()]
-                    
+
                     # Get medicine names for batches
                     medicine_ids = list(set([b.medicine_id for b in batches]))
                     med_result = await db.execute(
@@ -1369,22 +1389,22 @@ class InventoryManagementService:
                         )
                     )
                     medicine_map = {row[0]: row[1] for row in med_result.all()}
-                    
+
                     # Group batches by medicine
                     low_stock_medicines = {}
                     for batch in batches:
                         med_id = batch.medicine_id
                         if med_id not in low_stock_medicines:
                             low_stock_medicines[med_id] = {
-                                'name': medicine_map.get(med_id, f"Medicine #{med_id}"),
-                                'count': 0,
-                                'total_stock': 0
+                                "name": medicine_map.get(med_id, f"Medicine #{med_id}"),
+                                "count": 0,
+                                "total_stock": 0,
                             }
-                        low_stock_medicines[med_id]['count'] += 1
-                        low_stock_medicines[med_id]['total_stock'] += (
-                            int(batch.quantity) - int(batch.reserved_quantity or 0)
-                        )
-                    
+                        low_stock_medicines[med_id]["count"] += 1
+                        low_stock_medicines[med_id]["total_stock"] += int(
+                            batch.quantity
+                        ) - int(batch.reserved_quantity or 0)
+
                     # Send notification for each low stock medicine
                     for admin_id in admin_ids:
                         for med_id, info in low_stock_medicines.items():
@@ -1393,17 +1413,17 @@ class InventoryManagementService:
                                 user_id=admin_id,
                                 by_user_id=None,
                                 title="Low Stock Alert",
-                                message=f"{info['name']} is running low. Available stock: {info['total_stock']} units (threshold: {threshold})"
+                                message=f"{info['name']} is running low. Available stock: {info['total_stock']} units (threshold: {threshold})",
                             )
                             await self.notification_service.PUSH_NOTIFICATIONS(
                                 db=db,
                                 to_user_id=admin_id,
                                 notification_content=notification_data,
-                                by_user_id=None
+                                by_user_id=None,
                             )
                 except Exception as e:
                     print(f"[GET_LOW_STOCK_ITEMS] Failed to send notification: {e}")
-            
+
             return batches
         except Exception as e:
             print(f"[Inventory Error] GET_LOW_STOCK_ITEMS failed: {e}")
@@ -1433,18 +1453,22 @@ class InventoryManagementService:
             res = await db.execute(q)
             batches = res.scalars().all()
             print(f"[Inventory] Found {len(batches)} expired batches")
-            
+
             # Send notifications to admin about expired batches
             if batches:
                 try:
                     # Get admin users
                     admin_result = await db.execute(
-                        select(User.user_id).filter(
-                            User.role_id != 1, User.is_deleted == False, User.is_active == True
-                        ).limit(10)
+                        select(User.user_id)
+                        .filter(
+                            User.role_id != 1,
+                            User.is_deleted == False,
+                            User.is_active == True,
+                        )
+                        .limit(10)
                     )
                     admin_ids = [row[0] for row in admin_result.all()]
-                    
+
                     # Get medicine names for batches
                     medicine_ids = list(set([b.medicine_id for b in batches]))
                     med_result = await db.execute(
@@ -1453,18 +1477,18 @@ class InventoryManagementService:
                         )
                     )
                     medicine_map = {row[0]: row[1] for row in med_result.all()}
-                    
+
                     # Group batches by medicine
                     expired_medicines = {}
                     for batch in batches:
                         med_id = batch.medicine_id
                         if med_id not in expired_medicines:
                             expired_medicines[med_id] = {
-                                'name': medicine_map.get(med_id, f"Medicine #{med_id}"),
-                                'count': 0
+                                "name": medicine_map.get(med_id, f"Medicine #{med_id}"),
+                                "count": 0,
                             }
-                        expired_medicines[med_id]['count'] += 1
-                    
+                        expired_medicines[med_id]["count"] += 1
+
                     # Send notification for each expired medicine
                     for admin_id in admin_ids:
                         for med_id, info in expired_medicines.items():
@@ -1473,17 +1497,17 @@ class InventoryManagementService:
                                 user_id=admin_id,
                                 by_user_id=None,
                                 title="Expired Batch Alert",
-                                message=f"{info['name']} has {info['count']} expired batch(es). Please remove from inventory."
+                                message=f"{info['name']} has {info['count']} expired batch(es). Please remove from inventory.",
                             )
                             await self.notification_service.PUSH_NOTIFICATIONS(
                                 db=db,
                                 to_user_id=admin_id,
                                 notification_content=notification_data,
-                                by_user_id=None
+                                by_user_id=None,
                             )
                 except Exception as e:
                     print(f"[GET_EXPIRED_BATCHES] Failed to send notification: {e}")
-            
+
             return batches
         except Exception as e:
             print(f"[Inventory Error] GET_EXPIRED_BATCHES failed: {e}")
@@ -1517,18 +1541,22 @@ class InventoryManagementService:
             print(
                 f"[Inventory] Found {len(batches)} batches expiring within {days} days"
             )
-            
+
             # Send notifications to admin about expiring soon batches
             if batches:
                 try:
                     # Get admin users
                     admin_result = await db.execute(
-                        select(User.user_id).filter(
-                            User.role_id != 1, User.is_deleted == False, User.is_active == True
-                        ).limit(10)
+                        select(User.user_id)
+                        .filter(
+                            User.role_id != 1,
+                            User.is_deleted == False,
+                            User.is_active == True,
+                        )
+                        .limit(10)
                     )
                     admin_ids = [row[0] for row in admin_result.all()]
-                    
+
                     # Get medicine names for batches
                     medicine_ids = list(set([b.medicine_id for b in batches]))
                     med_result = await db.execute(
@@ -1537,21 +1565,26 @@ class InventoryManagementService:
                         )
                     )
                     medicine_map = {row[0]: row[1] for row in med_result.all()}
-                    
+
                     # Group batches by medicine
                     expiring_medicines = {}
                     for batch in batches:
                         med_id = batch.medicine_id
                         if med_id not in expiring_medicines:
                             expiring_medicines[med_id] = {
-                                'name': medicine_map.get(med_id, f"Medicine #{med_id}"),
-                                'count': 0,
-                                'earliest_expiry': batch.expiry_date
+                                "name": medicine_map.get(med_id, f"Medicine #{med_id}"),
+                                "count": 0,
+                                "earliest_expiry": batch.expiry_date,
                             }
-                        expiring_medicines[med_id]['count'] += 1
-                        if batch.expiry_date < expiring_medicines[med_id]['earliest_expiry']:
-                            expiring_medicines[med_id]['earliest_expiry'] = batch.expiry_date
-                    
+                        expiring_medicines[med_id]["count"] += 1
+                        if (
+                            batch.expiry_date
+                            < expiring_medicines[med_id]["earliest_expiry"]
+                        ):
+                            expiring_medicines[med_id][
+                                "earliest_expiry"
+                            ] = batch.expiry_date
+
                     # Send notification for each expiring medicine
                     for admin_id in admin_ids:
                         for med_id, info in expiring_medicines.items():
@@ -1560,17 +1593,17 @@ class InventoryManagementService:
                                 user_id=admin_id,
                                 by_user_id=None,
                                 title="Expiring Soon Alert",
-                                message=f"{info['name']} has {info['count']} batch(es) expiring within {days} days. Earliest expiry: {info['earliest_expiry']}"
+                                message=f"{info['name']} has {info['count']} batch(es) expiring within {days} days. Earliest expiry: {info['earliest_expiry']}",
                             )
                             await self.notification_service.PUSH_NOTIFICATIONS(
                                 db=db,
                                 to_user_id=admin_id,
                                 notification_content=notification_data,
-                                by_user_id=None
+                                by_user_id=None,
                             )
                 except Exception as e:
                     print(f"[GET_EXPIRING_SOON] Failed to send notification: {e}")
-            
+
             return batches
         except Exception as e:
             print(f"[Inventory Error] GET_EXPIRING_SOON failed: {e}")

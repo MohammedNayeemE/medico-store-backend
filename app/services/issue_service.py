@@ -30,6 +30,11 @@ from app.services.file_service import FileService
 
 
 class IssueService:
+    """
+    Service class for managing issues, issue categories, and issue messages.
+    
+    Handles issue creation, status updates, category management, and issue attachments.
+    """
     def __init__(self):
         self.file_service = FileService()
         self.BASE_URL = "http://localhost:8000/api/file_routes/assets"
@@ -37,6 +42,19 @@ class IssueService:
     # ==================== ISSUE CATEGORIES ==================== #
 
     async def LIST_ISSUE_CATEGORIES(self, db: AsyncSession, role_id: int):
+        """
+        Get all active issue categories (admin only).
+        
+        Args:
+            db: Database session
+            role_id: User role ID (must not be customer)
+        
+        Returns:
+            List of issue categories
+        
+        Raises:
+            HTTPException (403): If user is a customer
+        """
         try:
             if role_id == 1:
                 raise HTTPException(status_code=403, detail="Forbidden Acess")
