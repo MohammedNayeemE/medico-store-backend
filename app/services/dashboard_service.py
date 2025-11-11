@@ -19,12 +19,25 @@ from app.schemas.dashboard_schemas import *
 
 
 class DashboardService:
+    """
+    Service class for generating dashboard statistics and analytics.
+    
+    Provides methods for order statistics, sales analytics, inventory alerts, and revenue breakdown.
+    """
     def __init__(self, db: AsyncSession):
         self.db = db
 
     # ============= HELPER METHODS =============
     def _get_date_range(self, period: Optional[str] = "30d") -> Tuple[datetime, datetime]:
-        """Get date range based on period string"""
+        """
+        Get date range based on period string (7d, 30d, 90d, 1y, all).
+        
+        Args:
+            period: Period string (default: "30d")
+        
+        Returns:
+            Tuple of (start_date, end_date)
+        """
         end_date = datetime.now()
         
         if period == "7d":
@@ -44,7 +57,15 @@ class DashboardService:
 
     # ============= OVERVIEW STATISTICS =============
     async def get_dashboard_overview(self, period: str = "30d") -> DashboardOverview:
-        """Get high-level dashboard overview"""
+        """
+        Get high-level dashboard overview with key statistics.
+        
+        Args:
+            period: Time period for statistics (7d, 30d, 90d, 1y, all)
+        
+        Returns:
+            DashboardOverview with total orders, sales, products, and alert counts
+        """
         start_date, end_date = self._get_date_range(period)
         
         # Total orders

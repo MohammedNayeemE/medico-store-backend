@@ -48,6 +48,16 @@ async def get_admin_profile(
     db: AsyncSession = Depends(get_postgres),
     current_user: User = Security(get_current_user, scopes=["profile:read"]),
 ):
+    """
+    Get admin profile information for the authenticated admin user.
+    
+    Args:
+        db: Database session
+        current_user: Authenticated admin user (requires "profile:read" permission)
+    
+    Returns:
+        AdminProfileResponse with admin profile details
+    """
     result = await profile.GET_ADMIN_PROFILE(
         admin_id=current_user.user_id, db=db, role_id=current_user.role_id
     )
@@ -63,6 +73,17 @@ async def upload_admin_pic(
     db: AsyncSession = Depends(get_postgres),
     current_user=Security(get_current_user, scopes=["profile:write"]),
 ):
+    """
+    Upload or replace profile picture for the authenticated admin user.
+    
+    Args:
+        file: Image file to upload as profile picture
+        db: Database session
+        current_user: Authenticated admin user (requires "profile:write" permission)
+    
+    Returns:
+        Dictionary with file_url and profile_id
+    """
     result = await file_manager.UPLOAD_SINGLE_FILE(
         bucket=bucket, db=db, user_id=current_user.user_id, file=file
     )
@@ -80,6 +101,17 @@ async def update_admin_profile(
     current_user: User = Security(get_current_user, scopes=["profile:update"]),
     profile_data: AdminProfileCreate = Body(...),
 ):
+    """
+    Update admin profile information (name, phone number, profile picture).
+    
+    Args:
+        db: Database session
+        current_user: Authenticated admin user (requires "profile:update" permission)
+        profile_data: Admin profile data to update
+    
+    Returns:
+        Updated AdminProfileResponse
+    """
     result = await profile.UPDATE_ADMIN_PROFILE(
         admin_id=current_user.user_id,
         db=db,
@@ -98,6 +130,16 @@ async def get_customer_profile(
     db: AsyncSession = Depends(get_postgres),
     current_user: User = Security(get_current_user, scopes=["profile:read"]),
 ):
+    """
+    Get customer profile information for the authenticated customer.
+    
+    Args:
+        db: Database session
+        current_user: Authenticated customer user (requires "profile:read" permission)
+    
+    Returns:
+        CustomerProfileResponse with customer profile details
+    """
     result = await profile.GET_CUSTOMER_PROFILE(
         db=db, customer_id=current_user.user_id, role_id=current_user.role_id
     )
@@ -110,6 +152,17 @@ async def update_customer_profile(
     db: AsyncSession = Depends(get_postgres),
     current_user: User = Security(get_current_user, scopes=["profile:write"]),
 ):
+    """
+    Update customer profile information.
+    
+    Args:
+        profile_data: Customer profile data to update
+        db: Database session
+        current_user: Authenticated customer user (requires "profile:write" permission)
+    
+    Returns:
+        Updated customer profile
+    """
     result = await profile.UPDATE_CUSTOMER_PROFILE(
         db=db,
         customer_id=current_user.user_id,
@@ -127,6 +180,16 @@ async def get_customer_addresses(
     db: AsyncSession = Depends(get_postgres),
     current_user: User = Security(get_current_user, scopes=["profile:read"]),
 ):
+    """
+    Get all saved addresses for the authenticated customer.
+    
+    Args:
+        db: Database session
+        current_user: Authenticated customer user (requires "profile:read" permission)
+    
+    Returns:
+        List of customer addresses
+    """
     result = await profile.GET_CUSTOMER_ADDRESSES(
         customer_id=current_user.user_id, db=db, role_id=current_user.role_id
     )
@@ -141,6 +204,19 @@ async def add_addresses(
     longitude: float = Query(...),
     type_id: int = Query(None),
 ):
+    """
+    Add a new address for the customer using latitude and longitude coordinates.
+    
+    Args:
+        db: Database session
+        current_user: Authenticated customer user (requires "profile:write" permission)
+        latitude: Latitude coordinate of the address
+        longitude: Longitude coordinate of the address
+        type_id: Optional address type ID (e.g., home, work)
+    
+    Returns:
+        Created address object
+    """
     result = await profile.ADD_ADDRESS(
         customer_id=current_user.user_id,
         db=db,
@@ -158,6 +234,17 @@ async def add_address_type(
     db: AsyncSession = Depends(get_postgres),
     current_user=Security(get_current_user, scopes=["address_type:write"]),
 ):
+    """
+    Create a new address type (e.g., home, work, office).
+    
+    Args:
+        data: Address type creation data with name and description
+        db: Database session
+        current_user: Authenticated user (requires "address_type:write" permission)
+    
+    Returns:
+        Created address type object
+    """
     result = await profile.ADD_ADDRESS_TYPE(db=db, data=data)
     return result
 
@@ -170,6 +257,16 @@ async def get_address_types(
     db: AsyncSession = Depends(get_postgres),
     current_user=Security(get_current_user),
 ):
+    """
+    Get all active address types available in the system.
+    
+    Args:
+        db: Database session
+        current_user: Authenticated user
+    
+    Returns:
+        List of active address types
+    """
     result = await profile.GET_ALL_ADDRESS_TYPES(db=db)
     return result
 
@@ -184,6 +281,18 @@ async def update_address_type(
     db: AsyncSession = Depends(get_postgres),
     current_user=Security(get_current_user, scopes=["address_type:write"]),
 ):
+    """
+    Update an existing address type.
+    
+    Args:
+        type_id: Unique identifier of the address type to update
+        data: Address type update data
+        db: Database session
+        current_user: Authenticated user (requires "address_type:write" permission)
+    
+    Returns:
+        Updated address type object
+    """
     result = await profile.UPDATE_ADDRESS_TYPE(db=db, data=data, type_id=type_id)
     return result
 
@@ -194,6 +303,17 @@ async def delete_address_type(
     db: AsyncSession = Depends(get_postgres),
     current_user=Security(get_current_user, scopes=["address_type:delete"]),
 ):
+    """
+    Soft delete an address type (mark as deleted without permanent removal).
+    
+    Args:
+        type_id: Unique identifier of the address type to delete
+        db: Database session
+        current_user: Authenticated user (requires "address_type:delete" permission)
+    
+    Returns:
+        Success message confirming deletion
+    """
     result = await profile.DELETE_ADDRESS_TYPE(db=db, type_id=type_id)
     return result
 
@@ -204,7 +324,17 @@ async def add_family_member(
     db: AsyncSession = Depends(get_postgres),
     current_user: User = Security(get_current_user, scopes=["members:write"]),
 ):
-    """Add a new family member for the logged-in user."""
+    """
+    Add a new family member for the authenticated customer.
+    
+    Args:
+        family_member_data: Family member creation data (name, relation, etc.)
+        db: Database session
+        current_user: Authenticated customer user (requires "members:write" permission)
+    
+    Returns:
+        Created family member object
+    """
     result = await profile.ADD_FAMILY_MEMBER(
         db=db,
         user_id=current_user.user_id,
@@ -222,7 +352,16 @@ async def get_family_members(
     db: AsyncSession = Depends(get_postgres),
     current_user: User = Security(get_current_user, scopes=["members:read"]),
 ):
-    """Get all family members of a specific user."""
+    """
+    Get all family members for the authenticated customer.
+    
+    Args:
+        db: Database session
+        current_user: Authenticated customer user (requires "members:read" permission)
+    
+    Returns:
+        List of family members
+    """
     result = await profile.GET_FAMILY_MEMBERS(db=db, user_id=current_user.user_id)
     return result
 
@@ -237,7 +376,18 @@ async def update_family_member(
     db: AsyncSession = Depends(get_postgres),
     current_user: User = Security(get_current_user, scopes=["members:write"]),
 ):
-    """Update a specific family member."""
+    """
+    Update a specific family member's information.
+    
+    Args:
+        member_id: Unique identifier of the family member to update
+        family_member_data: Family member update data
+        db: Database session
+        current_user: Authenticated customer user (requires "members:write" permission)
+    
+    Returns:
+        Updated family member object
+    """
     result = await profile.UPDATE_FAMILY_MEMBER(
         db=db, member_id=member_id, data=family_member_data
     )

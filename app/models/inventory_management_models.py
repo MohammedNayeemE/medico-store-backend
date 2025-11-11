@@ -81,7 +81,7 @@ class Alternative(Base):
 class GSTSlab(Base):
     __tablename__ = "gst_slabs"
 
-    hsn_code = Column(String(255), primary_key=True)
+    hsn_code = Column(Integer, primary_key=True)
     description = Column(Text, nullable=False)
     gst_rate = Column(DECIMAL(5, 2), nullable=False)
     effective_from = Column(Date, nullable=False)
@@ -103,7 +103,7 @@ class Medicine(Base):
     is_prescribed = Column(Boolean, nullable=False, default=False)
     weight = Column(DECIMAL(18, 3), nullable=False)
     hsn_code = Column(
-        String(255),
+        Integer,
         ForeignKey("gst_slabs.hsn_code", onupdate="CASCADE"),
         nullable=False,
     )

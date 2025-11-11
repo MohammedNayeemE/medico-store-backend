@@ -1,10 +1,11 @@
 import uuid
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 from typing import List, Optional, Tuple
 
 from fastapi import HTTPException
+from pydantic.v1.types import OptionalDate
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -36,12 +37,29 @@ from app.services.order_management.order_management_service import OrderService
 
 
 class PaymentService:
+    """
+    Service class for managing payments and payment processing.
+
+    Handles payment initiation, status updates, invoice generation, and payment rollback.
+    """
+
     def __init__(self) -> None:
         self.order_service = OrderService()
 
     async def _reserve_for_item(
         self, db: AsyncSession, req_item: RequestOrderItem, order_id: int
     ) -> Tuple[bool, int]:
+        """
+        Reserve inventory for a request order item and create order items.
+
+        Args:
+            db: Database session
+            req_item: Request order item to reserve inventory for
+            order_id: Order ID to associate order items with
+
+        Returns:
+            Tuple of (all_available: bool, reserved_total: int)
+        """
         needed = int(req_item.quantity)
         reserved_total = 0
         order_items_to_create: List[OrderItem] = []
@@ -101,6 +119,13 @@ class PaymentService:
     async def _release_reservation_for_order(
         self, db: AsyncSession, order_id: int
     ) -> None:
+        """
+        Release reserved inventory for an order (used when payment fails).
+
+        Args:
+            db: Database session
+            order_id: Order ID to release reservations for
+        """
         q = select(OrderItem).filter(
             OrderItem.order_id == order_id,
             OrderItem.is_deleted == False,
@@ -129,6 +154,13 @@ class PaymentService:
     async def _finalize_reserved_items_on_payment(
         self, db: AsyncSession, order_id: int
     ) -> None:
+        """
+        Finalize reserved inventory when payment is completed (deduct from available quantity).
+
+        Args:
+            db: Database session
+            order_id: Order ID to finalize reservations for
+        """
         q = select(OrderItem).filter(
             OrderItem.order_id == order_id,
             OrderItem.is_deleted == False,
@@ -158,7 +190,15 @@ class PaymentService:
         self, db: AsyncSession, order: Order, coupon_code: Optional[str] = None
     ) -> None:
         """
-        Expects OrderItem.price to be a per-unit price.
+        Calculate and set order totals including discounts, taxes, and coupon codes.
+
+        Expects OrderItem.price to be a per-unit price. Applies discounts, calculates GST,
+        and updates the order's total_amount field.
+
+        Args:
+            db: Database session
+            order: Order object to calculate totals for
+            coupon_code: Optional coupon code to apply
         """
         subtotal = Decimal("0.00")
         total_tax = Decimal("0.00")
@@ -260,6 +300,15 @@ class PaymentService:
         await db.flush()
 
     async def _generate_invoice(self, db: AsyncSession, order: Order):
+        """
+        Generate an invoice for a completed order.
+
+        Creates invoice and invoice items with GST calculations and links them to the order.
+
+        Args:
+            db: Database session
+            order: Order object to generate invoice for
+        """
         invoice_number = f"INV-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
         now = datetime.now(timezone.utc)
         q = (
@@ -323,7 +372,29 @@ class PaymentService:
         payment_mode: str,
         user_id: int,
         role_id: int,
+        delivery_address_id: Optional[int] = None,
     ):
+        """
+        Initiate payment for a request order (customers only).
+
+        Converts request order to order, reserves inventory, normalizes prices, calculates totals,
+        and creates a payment record. Updates request order status to cancelled.
+
+        Args:
+            db: Database session
+            request_order_id: Request order ID to initiate payment for
+            payment_mode: Payment mode (e.g., "online", "cod")
+            user_id: Customer user ID
+            role_id: User role ID (must be customer)
+            delivery_address_id: Optional delivery address ID
+
+        Returns:
+            Created Payment object
+
+        Raises:
+            HTTPException (403): If user is not a customer
+            BadRequestException: If request order not found, invalid status, or payment link expired
+        """
         try:
             if role_id != 1:
                 raise HTTPException(status_code=403, detail="Forbidden Access")
@@ -333,9 +404,11 @@ class PaymentService:
                 )
             )
             request_order = result.scalar_one_or_none()
-            if not request_order or request_order.status not in [
-                RequestOrderStatusEnum.awaiting_payment.value,
-                RequestOrderStatusEnum.approved.value,
+            if not request_order:
+                raise BadRequestException("Request order not found")
+            if request_order.status not in [
+                RequestOrderStatusEnum.pending_customer_confirmation,
+                RequestOrderStatusEnum.approved,
             ]:
                 raise BadRequestException("Payment not allowed at this stage")
             if request_order.updated_at + timedelta(days=1) < datetime.now(
@@ -343,13 +416,11 @@ class PaymentService:
             ):
                 raise BadRequestException("Payment link expired")
             new_order = await self.order_service.CONVERT_REQUEST_TO_ORDER(
-                db=db, request_order_id=request_order_id
+                db=db,
+                request_order_id=request_order_id,
+                delivery_address_id=delivery_address_id,
             )
-            new_order.status = (
-                OrderStatusEnum.pending.value
-                if isinstance(OrderStatusEnum.pending, Enum)
-                else OrderStatusEnum.pending
-            )
+            new_order.status = OrderStatusEnum.pending.value
             db.add(new_order)
             await db.flush()
             query = select(RequestOrderItem).filter(
@@ -371,13 +442,6 @@ class PaymentService:
             new_order.predicted_delivery_date = now + timedelta(
                 days=1 if is_allocated_full else 2
             )
-            # -------------------------
-            # Safety normalization:
-            # If some OrderItem.price was mistakenly stored as line_total (unit_price * qty),
-            # convert it back to per-unit price before calculating totals.
-            # This uses the batch.medicine.price as a hint; if batch.medicine.price exists,
-            # and oi.price is significantly larger than the medicine base price, divide by quantity.
-            # -------------------------
             oi_q = select(OrderItem).filter(OrderItem.order_id == new_order.order_id)
             oi_res = await db.execute(
                 oi_q.options(
@@ -391,7 +455,6 @@ class PaymentService:
                         continue
                     oi_price_dec = Decimal(str(oi.price))
                     qty_dec = Decimal(str(oi.quantity or 1))
-                    # if batch.medicine.price exists, use it to decide whether oi.price is a line total
                     med_price_dec = None
                     if (
                         oi.batch
@@ -399,17 +462,12 @@ class PaymentService:
                         and getattr(oi.batch.medicine, "price", None) is not None
                     ):
                         med_price_dec = Decimal(str(oi.batch.medicine.price))
-                    # Heuristic:
-                    # - If oi.price is roughly equal to med.price => it's unit price -> keep
-                    # - If oi.price is roughly equal to med.price * qty -> it's line total -> convert
-                    # If med_price is not available, fallback to dividing when oi_price / qty is much smaller than oi_price
                     converted = False
                     if med_price_dec is not None:
                         if (
                             oi_price_dec >= (med_price_dec * qty_dec * Decimal("0.9"))
                             and qty_dec > 1
                         ):
-                            # looks like a line total (or close to it)
                             new_unit_price = (oi_price_dec / qty_dec).quantize(
                                 Decimal("0.01")
                             )
@@ -417,9 +475,7 @@ class PaymentService:
                             db.add(oi)
                             converted = True
                     else:
-                        # no med price available — if price significantly larger than 1*qty, convert
                         if oi_price_dec > qty_dec * Decimal("1.0") and qty_dec > 1:
-                            # convert fallback (safe)
                             new_unit_price = (oi_price_dec / qty_dec).quantize(
                                 Decimal("0.01")
                             )
@@ -427,12 +483,10 @@ class PaymentService:
                             db.add(oi)
                             converted = True
                     if converted:
-                        # optional: log a debug message
                         print(
                             f"[INITIATE_PAYMENT] normalized order_item id={getattr(oi,'order_item_id',None)} price -> {oi.price}"
                         )
                 except (InvalidOperation, ZeroDivisionError):
-                    # skip problematic rows (shouldn't normally happen)
                     continue
             await db.flush()
             await self._calculate_and_set_order_totals(
@@ -449,10 +503,16 @@ class PaymentService:
                 transaction_id=f"TXN-{uuid.uuid4().hex.upper()}",
             )
             db.add(new_payment)
+            request_order.status = (
+                RequestOrderStatusEnum.converted_to_order.value
+            )  # or keep as approved
+            request_order.updated_at = datetime.now(timezone.utc)
             await db.commit()
             await db.refresh(new_payment)
             await db.refresh(new_order)
             return new_payment
+        except BadRequestException:
+            raise
         except Exception as e:
             print("======================================")
             print(f"[INITIATE_PAYMENT] Error: {e}")
@@ -468,6 +528,25 @@ class PaymentService:
         new_status: PaymentStatusEnum,
         paid_at: Optional[datetime] = None,
     ):
+        """
+        Update payment status and handle payment completion/failure.
+
+        On completion: finalizes inventory reservations, confirms order, and generates invoice.
+        On failure: releases inventory reservations.
+
+        Args:
+            db: Database session
+            payment_id: Payment ID to update
+            new_status: New payment status (completed, failed, etc.)
+            paid_at: Optional payment timestamp (used for completed status)
+
+        Returns:
+            Updated Payment object
+
+        Raises:
+            NotFoundException: If payment not found
+            BadRequestException: If invalid status update
+        """
         try:
             result = await db.execute(
                 select(Payment).filter(Payment.payment_id == payment_id)
@@ -518,6 +597,19 @@ class PaymentService:
             )
 
     async def GET_ORDER_PAYMENTS(self, db: AsyncSession, order_id: int):
+        """
+        Get all payments for a specific order.
+
+        Args:
+            db: Database session
+            order_id: Order ID to get payments for
+
+        Returns:
+            Payment object for the order
+
+        Raises:
+            NotFoundException: If order not found
+        """
         try:
             result = await db.execute(
                 select(Payment).filter(Payment.order_id == order_id)
@@ -535,6 +627,16 @@ class PaymentService:
             )
 
     async def GET_CUSTOMER_PAYMENTS(self, db: AsyncSession, user_id: int):
+        """
+        Get all payments for a customer.
+
+        Args:
+            db: Database session
+            user_id: Customer user ID
+
+        Returns:
+            List of Payment objects for the customer
+        """
         try:
             result = await db.execute(
                 select(Payment).filter(Payment.user_id == user_id)

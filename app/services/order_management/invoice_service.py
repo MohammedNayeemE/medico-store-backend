@@ -20,7 +20,25 @@ from app.models.user_management_models import *
 
 
 class InvoiceService:
+    """
+    Service class for managing invoices.
+    
+    Handles invoice generation, retrieval, and customer invoice management.
+    """
     async def GET_INVOICE_DETAILS(self, db: AsyncSession, invoice_id: int):
+        """
+        Get detailed information about a specific invoice.
+        
+        Args:
+            db: Database session
+            invoice_id: Unique identifier of the invoice
+        
+        Returns:
+            Invoice object with invoice details
+        
+        Raises:
+            NotFoundException: If invoice not found
+        """
         try:
             result = await db.execute(
                 select(Invoice).filter(Invoice.invoice_id == invoice_id)
@@ -41,6 +59,20 @@ class InvoiceService:
     async def GET_CUSTOMER_INVOICES(
         self, db: AsyncSession, customer_id: int, role_id: int
     ):
+        """
+        Get all invoices for a customer (customers only).
+        
+        Args:
+            db: Database session
+            customer_id: Customer user ID
+            role_id: User role ID (must be customer)
+        
+        Returns:
+            List of invoices for the customer
+        
+        Raises:
+            HTTPException (403): If user is not a customer
+        """
         try:
             if role_id != 1:
                 raise HTTPException(status_code=403, detail="Forbidden Access")

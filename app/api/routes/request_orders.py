@@ -124,38 +124,90 @@ async def cancel_request_order(
     return result
 
 
+@router.post(
+    "/{request_order_id}/confirm",
+    description="Customer confirms the approved request order",
+)
+async def confirm_request_order(
+    request_order_id: int = Path(...),
+    db: AsyncSession = Depends(get_postgres),
+    current_user: User = Security(get_current_user, scopes=["request_order:write"]),
+):
+    result = await order_manager.CONFIRM_REQUEST_ORDER(
+        db=db,
+        request_order_id=request_order_id,
+        user_id=current_user.user_id,
+    )
+    return {"message": "Request order confirmed successfully", "result": result}
+
+
+@router.post(
+    "/{request_order_id}/reject",
+    description="Customer rejects the approved request order",
+)
+async def reject_request_order(
+    request_order_id: int = Path(...),
+    reason: RequestOrderReject = Body(...),
+    db: AsyncSession = Depends(get_postgres),
+    current_user: User = Security(get_current_user, scopes=["request_order:write"]),
+):
+    result = await order_manager.CUSTOMER_REJECT_REQUEST_ORDER(
+        db=db,
+        request_order_id=request_order_id,
+        user_id=current_user.user_id,
+        reason=reason,
+    )
+    return {"message": "Request order rejected by customer", "result": result}
+
+
 # ============= ADMIN ENDPOINTS ============= #
 
 
 @router.post(
     "/{request_order_id}/change-status",
-    description="Approve or Reject the status of the request_order",
+    description="Admin: Change the status of the request order (approve/reject)",
 )
 async def change_status_of_request_order(
+    background_tasks: BackgroundTasks,
     request_order_id: int = Path(...),
     status: RequestOrderStatusEnum = Query(...),
     db: AsyncSession = Depends(get_postgres),
     current_user: User = Security(
         get_current_user, scopes=["request_order_admin:update"]
     ),
-    reason: RequestOrderApprove = Body(...),
+    reason: RequestOrderApprove | RequestOrderReject = Body(...),
 ):
-    if status == RequestOrderStatusEnum.approved.value:
-        result = await order_manager.APPROVE_REQUEST_ORDER(
+    if status == RequestOrderStatusEnum.approved:
+        result = await order_manager.MOVE_TO_PENDING_CUSTOMER_CONFIRMATION(
             db=db,
             request_order_id=request_order_id,
             admin_id=current_user.user_id,
             data=reason,
         )
-        return result
-    else:
+        await order_manager.SEND_PAYMENT_NOTIFICATION(
+            db=db,
+            request_order_id=request_order_id,
+            admin_id=current_user.user_id,
+            background_tasks=background_tasks,
+        )
+        return {
+            "message": "Request order moved to 'pending_customer_confirmation'. Notification sent to customer.",
+            "result": result,
+        }
+    elif status == RequestOrderStatusEnum.rejected:
         result = await order_manager.REJECT_REQUEST_ORDER(
             db=db,
             admin_id=current_user.user_id,
             reason=reason,
             request_order_id=request_order_id,
         )
-        return result
+        return {"message": "Request order rejected successfully", "result": result}
+
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status transition to {status}. Only 'approved' or 'rejected' are allowed here.",
+        )
 
 
 @router.post(

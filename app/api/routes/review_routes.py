@@ -20,6 +20,15 @@ review_manager = ReviewService()
 async def get_reviews(
     db: AsyncSession = Depends(get_postgres),
 ):
+    """
+    Get all reviews in the system.
+    
+    Args:
+        db: Database session
+    
+    Returns:
+        List of all reviews
+    """
     result = await review_manager.GET_ALL_REVIEWS(db=db)
     return result
 
@@ -31,6 +40,16 @@ async def get_reviews_for_medicine(
     medicine_id: int = Path(...),
     db: AsyncSession = Depends(get_postgres),
 ):
+    """
+    Get all reviews for a specific medicine.
+    
+    Args:
+        medicine_id: Unique identifier of the medicine
+        db: Database session
+    
+    Returns:
+        List of reviews for the medicine
+    """
     result = await review_manager.GET_REVIEWS_FOR_MEDICINE(
         db=db, medicine_id=medicine_id
     )
@@ -104,6 +123,18 @@ async def add_review(
     current_user: User = Security(get_current_user, scopes=["review:write"]),
     db: AsyncSession = Depends(get_postgres),
 ):
+    """
+    Add a review for a medicine (customers only).
+    
+    Args:
+        medicine_id: Unique identifier of the medicine to review
+        review_data: Review data (rating, comment)
+        current_user: Authenticated customer user (requires "review:write" permission)
+        db: Database session
+    
+    Returns:
+        Created review object
+    """
     result = await review_manager.ADD_REVIEW(
         db=db,
         user_id=current_user.user_id,

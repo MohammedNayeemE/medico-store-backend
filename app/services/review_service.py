@@ -17,6 +17,11 @@ from app.schemas.review_schemas import ReviewCreate, ReviewResponse
 
 
 class ReviewService:
+    """
+    Service class for managing medicine reviews.
+    
+    Handles review creation, retrieval, and status updates for medicines.
+    """
     def __init__(self) -> None:
         pass
 
@@ -28,6 +33,23 @@ class ReviewService:
         medicine_id: int,
         review_data: ReviewCreate,
     ):
+        """
+        Add a review for a medicine (customers only).
+        
+        Args:
+            db: Database session
+            user_id: Customer user ID
+            role_id: User role ID (must be customer)
+            medicine_id: Medicine ID to review
+            review_data: Review data (rating, comment)
+        
+        Returns:
+            Created review object
+        
+        Raises:
+            HTTPException (403): If user is not a customer
+            NotFoundException: If medicine not found
+        """
         try:
             if role_id != 1:
                 raise HTTPException(status_code=403, detail="Forbidden Access")

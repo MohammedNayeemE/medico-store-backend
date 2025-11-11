@@ -10,6 +10,11 @@ from app.core.database import bucket
 
 
 class ContentService:
+    """
+    Service class for managing content management system (CMS) operations.
+    
+    Handles hero sections, banners, features, categories, promises, and policies stored in MongoDB.
+    """
     def __init__(self, db: AsyncIOMotorClient):
         self.db = db
         self.fs = bucket
@@ -24,7 +29,15 @@ class ContentService:
 
     # GridFS Helper Methods
     async def upload_image(self, file: UploadFile) -> str:
-        """Upload image to GridFS and return file ID"""
+        """
+        Upload image to GridFS and return file ID.
+        
+        Args:
+            file: Image file to upload
+        
+        Returns:
+            File ID as string
+        """
         contents = await file.read()
         file_id = await self.fs.upload_from_stream(
             file.filename,
@@ -37,13 +50,26 @@ class ContentService:
         return str(file_id)
 
     async def get_image_url(self, file_id: str) -> Optional[str]:
-        """Generate URL for GridFS image"""
+        """
+        Generate URL for GridFS image.
+        
+        Args:
+            file_id: GridFS file ID
+        
+        Returns:
+            Image URL or None if file_id is empty
+        """
         if not file_id:
             return None
         return f"/api/content/images/{file_id}"
 
     async def delete_image(self, file_id: str):
-        """Delete image from GridFS"""
+        """
+        Delete image from GridFS.
+        
+        Args:
+            file_id: GridFS file ID to delete
+        """
         try:
             await self.fs.delete(ObjectId(file_id))
         except Exception as e:

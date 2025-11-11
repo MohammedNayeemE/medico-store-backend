@@ -14,6 +14,7 @@ from sqlalchemy.orm import joinedload, selectinload
 
 from app.core.exceptions import ForbiddenException, NotFoundException
 from app.models.enums import (
+    NotificationType,
     OrderStatusEnum,
     PrescriptionStatusEnum,
     RequestOrderStatusEnum,
@@ -30,7 +31,8 @@ from app.models.order_management_models import (
     RequestOrder,
     RequestOrderItem,
 )
-from app.models.user_management_models import User
+from app.models.user_management_models import Address, User
+from app.schemas.notification_schemas import NotificationCreate
 from app.schemas.order_schemas import OrderCreate, OrderItemCreate, OrderItemUpdate
 from app.schemas.request_order import (
     RequestOrderApprove,
@@ -41,11 +43,15 @@ from app.schemas.request_order import (
 from app.services.file_service import FileService
 from app.services.mail_service import MailService
 from app.services.notification_service import NotificationService
-from app.schemas.notification_schemas import NotificationCreate
-from app.models.enums import NotificationType
 
 
 class OrderService:
+    """
+    Service class for managing orders, prescriptions, and request orders.
+
+    Handles order creation, status updates, prescription uploads, and order item management.
+    """
+
     def __init__(self) -> None:
         self.file_manager = FileService()
         self.MAX_FILE_SIZE_MB = 10
@@ -55,6 +61,7 @@ class OrderService:
         self.notification_service = NotificationService()
 
     def _attach_file_url(self, asset_id: str) -> str:
+        """Helper method to generate file URL from asset ID."""
         return f"{self.BASE_FILE_URL}/{asset_id}"
 
     async def UPLOAD_PRESCRIPTION(
@@ -65,6 +72,23 @@ class OrderService:
         bucket: AsyncIOMotorGridFSBucket,
         role_id: int,
     ):
+        """
+        Upload a prescription file for a customer.
+
+        Args:
+            file: Prescription file (image or PDF)
+            customer_id: Customer user ID
+            db: Database session
+            bucket: MongoDB GridFS bucket for file storage
+            role_id: User role ID (must be customer)
+
+        Returns:
+            Dictionary with prescription_id and file URL
+
+        Raises:
+            HTTPException (403): If user is not a customer
+            HTTPException (400): If file type or size is invalid
+        """
         try:
             if role_id != 1:
                 raise HTTPException(status_code=403, detail="Forbidden Access")
@@ -115,6 +139,23 @@ class OrderService:
         skip: int = 0,
         limit: int = 10,
     ):
+        """
+        Get paginated list of prescriptions for a customer (customers only).
+
+        Args:
+            role_id: User role ID (must be customer)
+            db: Database session
+            customer_id: Customer user ID
+            skip: Pagination offset
+            limit: Pagination limit
+
+        Returns:
+            Dictionary with total, page, limit, and list of prescriptions
+
+        Raises:
+            HTTPException (403): If user is not a customer
+            HTTPException (404): If customer not found
+        """
         try:
             if role_id != 1:
                 raise HTTPException(status_code=403, detail="Forbidden Access")
@@ -176,6 +217,19 @@ class OrderService:
         db: AsyncSession,
         prescription_id: int,
     ):
+        """
+        Get detailed information about a specific prescription.
+
+        Args:
+            db: Database session
+            prescription_id: Prescription ID to retrieve
+
+        Returns:
+            Dictionary with prescription details and file URL
+
+        Raises:
+            HTTPException (404): If prescription not found
+        """
         try:
             query = (
                 select(Prescription)
@@ -220,6 +274,25 @@ class OrderService:
         verified_by: int,
         notes: str | None = None,
     ):
+        """
+        Verify or reject a prescription (admin only).
+
+        Args:
+            db: Database session
+            role_id: User role ID (must not be customer)
+            prescription_id: Prescription ID to verify
+            is_verified: True to verify, False to reject
+            verified_by: Admin user ID verifying the prescription
+            notes: Optional notes about verification
+
+        Returns:
+            Dictionary with prescription ID, prescription object, and notes
+
+        Raises:
+            HTTPException (403): If user is a customer
+            HTTPException (404): If prescription not found
+            HTTPException (400): If prescription already verified/rejected
+        """
         try:
             if role_id == 1:
                 raise HTTPException(status_code=403, detail="Forbidden Access")
@@ -269,6 +342,20 @@ class OrderService:
         prescription_id: int,
         deleted_by: int,
     ):
+        """
+        Soft delete a prescription (mark as deleted without permanent removal).
+
+        Args:
+            db: Database session
+            prescription_id: Prescription ID to delete
+            deleted_by: User ID performing the deletion
+
+        Returns:
+            Dictionary with deletion confirmation message and details
+
+        Raises:
+            HTTPException (404): If prescription not found or already deleted
+        """
         try:
             result = await db.execute(
                 select(Prescription).where(
@@ -305,7 +392,23 @@ class OrderService:
     async def CREATE_REQUEST_ORDER(
         self, db: AsyncSession, request_data: RequestOrderCreate, current_user: User
     ) -> RequestOrderCreate:
+        """
+        Create a new request order for a customer.
 
+        Validates medicines, calculates estimated prices from available batches, creates request
+        order and items, and sends notifications to admins.
+
+        Args:
+            db: Database session
+            request_data: Request order creation data (items, prescription_id, remarks, etc.)
+            current_user: Authenticated customer user
+
+        Returns:
+            RequestOrderResponse with created request order details
+
+        Raises:
+            HTTPException (404): If prescription or medicine not found, or medicine not in stock
+        """
         try:
             customer_id: int = current_user.user_id
             if request_data.prescription_id:
@@ -375,34 +478,38 @@ class OrderService:
                 db.add(order_item)
             await db.commit()
             await db.refresh(new_order)
-            
+
             # Send notification to admin about new request order
             try:
                 # Get admin users (role_id != 1)
                 admin_result = await db.execute(
-                    select(User.user_id).filter(
-                        User.role_id != 1, User.is_deleted == False, User.is_active == True
-                    ).limit(10)
+                    select(User.user_id)
+                    .filter(
+                        User.role_id != 1,
+                        User.is_deleted == False,
+                        User.is_active == True,
+                    )
+                    .limit(10)
                 )
                 admin_ids = [row[0] for row in admin_result.all()]
-                
+
                 for admin_id in admin_ids:
                     notification_data = NotificationCreate(
                         type=NotificationType.request,
                         user_id=admin_id,
                         by_user_id=current_user.user_id,
                         title="New Order Request",
-                        message=f"New order request #{new_order.request_order_id} has been created by customer."
+                        message=f"New order request #{new_order.request_order_id} has been created by customer.",
                     )
                     await self.notification_service.PUSH_NOTIFICATIONS(
                         db=db,
                         to_user_id=admin_id,
                         notification_content=notification_data,
-                        by_user_id=current_user.user_id
+                        by_user_id=current_user.user_id,
                     )
             except Exception as e:
                 print(f"[CREATE_REQUEST_ORDER] Failed to send notification: {e}")
-            
+
             response = RequestOrderResponse(
                 request_order_id=new_order.request_order_id,
                 customer_id=new_order.customer_id,
@@ -432,6 +539,18 @@ class OrderService:
         skip: int = 0,
         limit: int = Query(10),
     ):
+        """
+        Get paginated list of request orders for the authenticated customer.
+
+        Args:
+            db: Database session
+            current_user: Authenticated customer user
+            skip: Pagination offset
+            limit: Pagination limit
+
+        Returns:
+            Dictionary with total count and list of request orders
+        """
         try:
             customer_id: int = current_user.user_id
             total_result = await db.execute(
@@ -472,6 +591,24 @@ class OrderService:
     async def GET_REQUEST_ORDER_DETAILS(
         self, db: AsyncSession, request_order_id: int, user_id: int, role_id: int
     ):
+        """
+        Get detailed information about a specific request order.
+
+        Customers can only view their own request orders. Admins can view any request order.
+
+        Args:
+            db: Database session
+            request_order_id: Request order ID to retrieve
+            user_id: User ID requesting the details
+            role_id: User role ID
+
+        Returns:
+            Dictionary with request order details, items, and prescription info
+
+        Raises:
+            HTTPException (404): If request order not found
+            HTTPException (403): If customer tries to view another customer's order
+        """
         try:
             query = (
                 select(RequestOrder)
@@ -536,12 +673,138 @@ class OrderService:
                 detail="Internal server error: [get_request_order_details]",
             )
 
+    async def MOVE_TO_PENDING_CUSTOMER_CONFIRMATION(
+        self, db, request_order_id: int, admin_id: int, data
+    ):
+        """
+        Move a request order to pending customer confirmation status (admin only).
+
+        Args:
+            db: Database session
+            request_order_id: Request order ID to update
+            admin_id: Admin user ID performing the action
+            data: Data object with optional reason field
+
+        Returns:
+            Updated RequestOrder object
+
+        Raises:
+            HTTPException (404): If request order not found
+            HTTPException (400): If order is not in pending status
+        """
+        request_order = await db.get(RequestOrder, request_order_id)
+        if not request_order:
+            raise HTTPException(status_code=404, detail="Request order not found")
+        if request_order.status != RequestOrderStatusEnum.pending:
+            raise HTTPException(
+                status_code=400,
+                detail="Only pending orders can be moved to pending_customer_confirmation",
+            )
+        request_order.status = RequestOrderStatusEnum.pending_customer_confirmation
+        request_order.admin_id = admin_id
+        request_order.remarks = data.reason if hasattr(data, "reason") else None
+        await db.commit()
+        await db.refresh(request_order)
+        return request_order
+
+    async def CONFIRM_REQUEST_ORDER(self, db, request_order_id: int, user_id: int):
+        """
+        Confirm a request order by customer (moves to approved status).
+
+        Args:
+            db: Database session
+            request_order_id: Request order ID to confirm
+            user_id: Customer user ID confirming the order
+
+        Returns:
+            Updated RequestOrder object
+
+        Raises:
+            HTTPException (404): If request order not found
+            HTTPException (400): If order is not awaiting confirmation
+            HTTPException (403): If user is not authorized to confirm this order
+        """
+        request_order = await db.get(RequestOrder, request_order_id)
+        if not request_order:
+            raise HTTPException(status_code=404, detail="Request order not found")
+
+        if request_order.status != RequestOrderStatusEnum.pending_customer_confirmation:
+            raise HTTPException(
+                status_code=400, detail="Order is not awaiting confirmation"
+            )
+
+        if request_order.customer_id != user_id:
+            raise HTTPException(
+                status_code=403, detail="You are not authorized to confirm this order"
+            )
+
+        request_order.status = RequestOrderStatusEnum.approved
+        await db.commit()
+        await db.refresh(request_order)
+        return request_order
+
+    async def CUSTOMER_REJECT_REQUEST_ORDER(
+        self, db, request_order_id: int, user_id: int, reason
+    ):
+        """
+        Reject a request order by customer (moves to customer_rejected status).
+
+        Args:
+            db: Database session
+            request_order_id: Request order ID to reject
+            user_id: Customer user ID rejecting the order
+            reason: Reason object with rejection_reason field
+
+        Returns:
+            Updated RequestOrder object
+
+        Raises:
+            HTTPException (404): If request order not found
+            HTTPException (400): If order is not awaiting confirmation
+            HTTPException (403): If user is not authorized to reject this order
+        """
+        request_order = await db.get(RequestOrder, request_order_id)
+        if not request_order:
+            raise HTTPException(status_code=404, detail="Request order not found")
+
+        if request_order.status != RequestOrderStatusEnum.pending_customer_confirmation:
+            raise HTTPException(
+                status_code=400, detail="Order is not awaiting confirmation"
+            )
+
+        if request_order.customer_id != user_id:
+            raise HTTPException(
+                status_code=403, detail="You are not authorized to reject this order"
+            )
+
+        request_order.status = RequestOrderStatusEnum.customer_rejected
+        request_order.rejection_reason = reason.reason
+        await db.commit()
+        await db.refresh(request_order)
+        return request_order
+
     async def CANCEL_REQUEST_ORDER(
         self,
         db: AsyncSession,
         request_order_id: int,
         user_id: int,
     ):
+        """
+        Cancel a request order by customer.
+
+        Args:
+            db: Database session
+            request_order_id: Request order ID to cancel
+            user_id: Customer user ID cancelling the order
+
+        Returns:
+            Dictionary with cancellation confirmation message and details
+
+        Raises:
+            HTTPException (404): If request order not found
+            HTTPException (403): If user is not authorized to cancel this order
+            HTTPException (400): If order cannot be cancelled in current status
+        """
         try:
             result = await db.execute(
                 select(RequestOrder).filter(
@@ -558,10 +821,8 @@ class OrderService:
                     detail="You are not authorized to cancel this order",
                 )
             if request_order.status in [
-                RequestOrderStatusEnum.awaiting_payment,
-                RequestOrderStatusEnum.approved,
+                RequestOrderStatusEnum.converted_to_order,
                 RequestOrderStatusEnum.cancelled,
-                RequestOrderStatusEnum.converted,
             ]:
                 raise HTTPException(
                     status_code=400,
@@ -595,6 +856,24 @@ class OrderService:
         skip: int = 0,
         limit: int = 10,
     ):
+        """
+        Get paginated and filtered list of request orders for admin view.
+
+        Supports filtering by status, customer_id, prescription_id, search term, and date range.
+        Supports sorting by created_at or updated_at.
+
+        Args:
+            db: Database session
+            filters: Dictionary with filter parameters (status, customer_id, prescription_id, search, date_from, date_to, sort_by, sort_order)
+            skip: Pagination offset
+            limit: Pagination limit
+
+        Returns:
+            Dictionary with total, skip, limit, and list of request orders
+
+        Raises:
+            HTTPException (400): If date format is invalid
+        """
         try:
             status = filters.get("status")
             customer_id = filters.get("customer_id")
@@ -701,6 +980,24 @@ class OrderService:
         admin_id: int,
         items: list[RequestOrderItemUpdate],
     ):
+        """
+        Modify items in a request order (admin only, pending orders only).
+
+        Supports add, update, and remove actions for order items.
+
+        Args:
+            db: Database session
+            request_order_id: Request order ID to modify
+            admin_id: Admin user ID performing the modification
+            items: List of item update actions (add, update, remove)
+
+        Returns:
+            Dictionary with modification confirmation and updated order details
+
+        Raises:
+            HTTPException (404): If request order or medicine not found
+            HTTPException (400): If order is not in pending status or invalid action
+        """
         try:
             result = await db.execute(
                 select(RequestOrder)
@@ -807,6 +1104,25 @@ class OrderService:
         admin_id: int,
         data: RequestOrderApprove,
     ):
+        """
+        Approve a request order (admin only).
+
+        Updates order status to approved, verifies associated prescription, and sends
+        notification to customer.
+
+        Args:
+            db: Database session
+            request_order_id: Request order ID to approve
+            admin_id: Admin user ID approving the order
+            data: Approval data with optional remarks
+
+        Returns:
+            Dictionary with approval confirmation and order details
+
+        Raises:
+            HTTPException (404): If request order not found
+            HTTPException (400): If order cannot be approved in current status or has no items
+        """
         try:
             result = await db.execute(
                 select(RequestOrder)
@@ -850,7 +1166,7 @@ class OrderService:
                 prescription_obj.status = PrescriptionStatusEnum.verified.value
             await db.commit()
             await db.refresh(order)
-            
+
             # Send notification to customer about order approval
             try:
                 notification_data = NotificationCreate(
@@ -858,17 +1174,17 @@ class OrderService:
                     user_id=order.customer_id,
                     by_user_id=admin_id,
                     title="Order Approved",
-                    message=f"Your order request #{order.request_order_id} has been approved."
+                    message=f"Your order request #{order.request_order_id} has been approved.",
                 )
                 await self.notification_service.PUSH_NOTIFICATIONS(
                     db=db,
                     to_user_id=order.customer_id,
                     notification_content=notification_data,
-                    by_user_id=admin_id
+                    by_user_id=admin_id,
                 )
             except Exception as e:
                 print(f"[APPROVE_REQUEST_ORDER] Failed to send notification: {e}")
-            
+
             return {
                 "message": "Request order approved successfully",
                 "request_order_id": order.request_order_id,
@@ -894,6 +1210,24 @@ class OrderService:
         admin_id: int,
         reason: RequestOrderApprove,
     ):
+        """
+        Reject a request order (admin only).
+
+        Updates order status to rejected, records rejection reason, and sends notification to customer.
+
+        Args:
+            db: Database session
+            request_order_id: Request order ID to reject
+            admin_id: Admin user ID rejecting the order
+            reason: Rejection reason data
+
+        Returns:
+            Dictionary with rejection confirmation and order details
+
+        Raises:
+            HTTPException (404): If request order not found
+            HTTPException (400): If order cannot be rejected in current status
+        """
         try:
             result = await db.execute(
                 select(RequestOrder).filter(
@@ -920,7 +1254,7 @@ class OrderService:
                 order.verified_at = datetime.utcnow()
             await db.commit()
             await db.refresh(order)
-            
+
             # Send notification to customer about order rejection
             try:
                 notification_data = NotificationCreate(
@@ -928,17 +1262,17 @@ class OrderService:
                     user_id=order.customer_id,
                     by_user_id=admin_id,
                     title="Order Rejected",
-                    message=f"Your order request #{order.request_order_id} has been rejected. Reason: {order.remarks if order.remarks else 'No reason provided'}"
+                    message=f"Your order request #{order.request_order_id} has been rejected. Reason: {order.remarks if order.remarks else 'No reason provided'}",
                 )
                 await self.notification_service.PUSH_NOTIFICATIONS(
                     db=db,
                     to_user_id=order.customer_id,
                     notification_content=notification_data,
-                    by_user_id=admin_id
+                    by_user_id=admin_id,
                 )
             except Exception as e:
                 print(f"[REJECT_REQUEST_ORDER] Failed to send notification: {e}")
-            
+
             return {
                 "message": "Request order rejected successfully",
                 "request_order_id": order.request_order_id,
@@ -962,7 +1296,26 @@ class OrderService:
         self,
         db: AsyncSession,
         request_order_id: int,
+        delivery_address_id: Optional[int] = None,  # ✅ new
     ) -> Order:
+        """
+        Convert a request order to an order.
+
+        Validates request order status, resolves delivery address (uses provided address or
+        customer's primary address), and creates a new Order object (not yet saved to DB).
+
+        Args:
+            db: Database session
+            request_order_id: Request order ID to convert
+            delivery_address_id: Optional delivery address ID (uses primary address if not provided)
+
+        Returns:
+            Order object (not yet saved to database)
+
+        Raises:
+            HTTPException (404): If request order or address not found
+            HTTPException (400): If order cannot be converted in current status or has no items
+        """
         try:
             result = await db.execute(
                 select(RequestOrder)
@@ -975,9 +1328,10 @@ class OrderService:
             request_order = result.scalar_one_or_none()
             if not request_order:
                 raise HTTPException(status_code=404, detail="Request order not found")
+
             if request_order.status not in (
-                RequestOrderStatusEnum.approved,
-                RequestOrderStatusEnum.awaiting_payment,
+                RequestOrderStatusEnum.approved.value,
+                RequestOrderStatusEnum.pending_customer_confirmation.value,
             ):
                 raise HTTPException(
                     status_code=400,
@@ -985,31 +1339,52 @@ class OrderService:
                 )
             if not request_order.items:
                 raise HTTPException(
-                    status_code=400,
-                    detail="Cannot convert an order with no items.",
+                    status_code=400, detail="Cannot convert an order with no items."
                 )
-
-            # Sum unit_price * quantity for each request item.
-            # I assume RequestOrderItem has fields: estimated_price (per-unit) and quantity.
+            resolved_address_id = None
+            if delivery_address_id:
+                addr_result = await db.execute(
+                    select(Address).filter(
+                        Address.address_id == delivery_address_id,
+                        Address.user_id == request_order.customer_id,
+                        Address.is_deleted == False,
+                    )
+                )
+                valid_address = addr_result.scalar_one_or_none()
+                if not valid_address:
+                    raise HTTPException(
+                        status_code=404, detail="Invalid delivery address ID"
+                    )
+                resolved_address_id = valid_address.address_id
+            else:
+                addr_result = await db.execute(
+                    select(Address).filter(
+                        Address.user_id == request_order.customer_id,
+                        Address.is_deleted == False,
+                        Address.is_primary == True,
+                    )
+                )
+                primary_address = addr_result.scalar_one_or_none()
+                if not primary_address:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="No delivery address provided and no primary address found for this customer",
+                    )
+                resolved_address_id = primary_address.address_id
             total_amount_dec = Decimal("0.00")
             for i in request_order.items:
                 unit = Decimal(str(i.estimated_price or 0))
                 qty = Decimal(str(getattr(i, "quantity", 1) or 1))
                 total_amount_dec += unit * qty
-
             new_order = Order(
                 customer_id=request_order.customer_id,
                 member_id=request_order.member_id,
                 prescription_id=request_order.prescription_id,
-                # store numeric consistently (float or Decimal depending on your model)
                 total_amount=float(total_amount_dec.quantize(Decimal("0.01"))),
-                status=(
-                    OrderStatusEnum.pending.value
-                    if isinstance(OrderStatusEnum.pending, Enum)
-                    else OrderStatusEnum.pending
-                ),
+                status=OrderStatusEnum.pending.value,
                 request_order_id=request_order_id,
                 created_at=datetime.utcnow(),
+                delivery_address_id=resolved_address_id,  # ✅ final resolved address
             )
             return new_order
         except HTTPException:
@@ -1024,6 +1399,19 @@ class OrderService:
             )
 
     async def GET_ALL_ORDERS(self, db: AsyncSession, role_id: int):
+        """
+        Get all orders in the system (admin only).
+
+        Args:
+            db: Database session
+            role_id: User role ID (must not be customer)
+
+        Returns:
+            List of Order objects
+
+        Raises:
+            ForbiddenException: If user is a customer
+        """
         try:
             if role_id == 1:
                 raise ForbiddenException("forbidden access")
@@ -1042,6 +1430,25 @@ class OrderService:
         admin_id: int,
         background_tasks: BackgroundTasks,
     ):
+        """
+        Send payment/confirmation notification to customer (admin only).
+
+        Sends email and push notification to customer with order confirmation link and
+        estimated total amount. Order must be in pending_customer_confirmation status.
+
+        Args:
+            db: Database session
+            request_order_id: Request order ID to send notification for
+            admin_id: Admin user ID sending the notification
+            background_tasks: FastAPI background tasks for sending email
+
+        Returns:
+            Dictionary with notification confirmation and order details
+
+        Raises:
+            HTTPException (404): If request order or customer not found
+            HTTPException (400): If order is not in pending_customer_confirmation status
+        """
         try:
             result = await db.execute(
                 select(RequestOrder)
@@ -1054,10 +1461,10 @@ class OrderService:
             order = result.scalar_one_or_none()
             if not order:
                 raise HTTPException(status_code=404, detail="Request order not found")
-            if order.status not in [
-                RequestOrderStatusEnum.approved.value,
-                RequestOrderStatusEnum.awaiting_payment.value,
-            ]:
+            if (
+                order.status
+                != RequestOrderStatusEnum.pending_customer_confirmation.value
+            ):
                 raise HTTPException(
                     status_code=400,
                     detail=f"Cannot send payment notification for order in status: {order.status}",
@@ -1065,7 +1472,6 @@ class OrderService:
             total_estimated_price = sum(
                 float(item.estimated_price or 0) for item in order.items
             )
-            order.status = RequestOrderStatusEnum.awaiting_payment.value
             order.updated_at = datetime.utcnow()
             if hasattr(order, "verified_by"):
                 order.verified_by = admin_id
@@ -1081,7 +1487,7 @@ class OrderService:
                 raise HTTPException(status_code=404, detail="Customer not found")
             user_email = user.email
             user_name = user_email.split("@")[0] if user_email else "Customer"
-            link = f"http://localhost:8000/api/v1/payments/initiate?request_order_id={request_order_id}"
+            link = f"http://localhost:8000/api/v1/request-orders/{request_order_id}/confirm"
             background_tasks.add_task(
                 self.mail_service.SEND_PAYMENT_NOTIFICATION_MAIL,
                 user_email,
@@ -1091,34 +1497,34 @@ class OrderService:
                 order.prescription_id,
                 link,
             )
-            
-            # Send push notification to customer about payment
             try:
                 notification_data = NotificationCreate(
                     type=NotificationType.request,
                     user_id=order.customer_id,
                     by_user_id=admin_id,
-                    title="Payment Required",
-                    message=f"Please complete payment for order #{request_order_id}. Total amount: ₹{total_estimated_price:.2f}"
+                    title="Order Confirmation Required",
+                    message=(
+                        f"Your order #{request_order_id} has been reviewed. "
+                        f"Total estimated amount: ₹{total_estimated_price:.2f}. "
+                        f"Please confirm to proceed with payment."
+                    ),
                 )
                 await self.notification_service.PUSH_NOTIFICATIONS(
                     db=db,
                     to_user_id=order.customer_id,
                     notification_content=notification_data,
-                    by_user_id=admin_id
+                    by_user_id=admin_id,
                 )
             except Exception as e:
-                print(f"[SEND_PAYMENT_NOTIFICATION] Failed to send push notification: {e}")
-            
+                print(f"[SEND_PAYMENT_NOTIFICATION] Push notification failed: {e}")
             return {
-                "message": "Payment notification sent successfully",
+                "message": "Customer notified for confirmation successfully",
                 "request_order_id": order.request_order_id,
                 "status": order.status,
                 "notified_by": admin_id,
                 "updated_at": order.updated_at,
                 "total_estimated_price": total_estimated_price,
             }
-
         except HTTPException:
             raise
         except Exception as e:
@@ -1131,6 +1537,21 @@ class OrderService:
             )
 
     async def CREATE_ORDER(self, db: AsyncSession, order_data: OrderCreate):
+        """
+        Create a new order directly (without request order).
+
+        Validates customer, family member, and prescription, then creates order and order items.
+
+        Args:
+            db: Database session
+            order_data: Order creation data (customer_id, items, prescription_id, etc.)
+
+        Returns:
+            Created Order object
+
+        Raises:
+            HTTPException (404): If customer, family member, or prescription not found
+        """
         result = await db.execute(
             select(User).filter(User.user_id == order_data.customer_id)
         )
@@ -1176,6 +1597,21 @@ class OrderService:
         return new_order
 
     async def GET_ORDER_DETAILS(self, db: AsyncSession, order_id: int):
+        """
+        Get detailed information about a specific order.
+
+        Includes customer, member, prescription, order items, invoice, and payments.
+
+        Args:
+            db: Database session
+            order_id: Order ID to retrieve
+
+        Returns:
+            Order object with all related data loaded
+
+        Raises:
+            HTTPException (404): If order not found
+        """
         try:
             result = await db.execute(
                 select(Order)
@@ -1210,6 +1646,22 @@ class OrderService:
         skip: int = 0,
         limit: int = 10,
     ):
+        """
+        Get paginated list of orders for a customer (customers only).
+
+        Args:
+            db: Database session
+            customer_id: Customer user ID
+            role_id: User role ID (must be customer)
+            skip: Pagination offset
+            limit: Pagination limit
+
+        Returns:
+            List of Order objects with order items, invoice, and payments loaded
+
+        Raises:
+            HTTPException (403): If user is not a customer
+        """
         try:
             if role_id != 1:
                 raise HTTPException(status_code=403, detail="Forbidden Access")
@@ -1239,6 +1691,24 @@ class OrderService:
         order_id: int,
         new_status: OrderStatusEnum,
     ):
+        """
+        Update the status of an order with validation of status transitions.
+
+        Validates status transitions (pending -> shipped/cancelled, shipped -> delivered/cancelled).
+        Sends notification to customer on status changes.
+
+        Args:
+            db: Database session
+            order_id: Order ID to update
+            new_status: New order status (OrderStatusEnum)
+
+        Returns:
+            Updated Order object
+
+        Raises:
+            HTTPException (404): If order not found
+            HTTPException (400): If invalid status transition
+        """
         try:
             result = await db.execute(
                 select(Order).filter(
@@ -1253,9 +1723,9 @@ class OrderService:
                     OrderStatusEnum.shipped,
                     OrderStatusEnum.cancelled,
                 ],
+                OrderStatusEnum.confirmed: [OrderStatusEnum.shipped],
                 OrderStatusEnum.shipped: [
                     OrderStatusEnum.delivered,
-                    OrderStatusEnum.cancelled,
                 ],
                 OrderStatusEnum.delivered: [],
                 OrderStatusEnum.cancelled: [],
@@ -1270,32 +1740,36 @@ class OrderService:
             await db.flush()
             await db.commit()
             await db.refresh(order_obj)
-            
+
             # Send notification to customer about order status change
             try:
                 status_messages = {
                     OrderStatusEnum.shipped: "Your order has been shipped",
                     OrderStatusEnum.delivered: "Your order has been delivered",
-                    OrderStatusEnum.cancelled: "Your order has been cancelled"
+                    OrderStatusEnum.cancelled: "Your order has been cancelled",
                 }
-                
+
                 if new_status in status_messages:
                     notification_data = NotificationCreate(
-                        type=NotificationType.info if new_status != OrderStatusEnum.cancelled else NotificationType.alert,
+                        type=(
+                            NotificationType.info
+                            if new_status != OrderStatusEnum.cancelled
+                            else NotificationType.alert
+                        ),
                         user_id=order_obj.customer_id,
                         by_user_id=None,
                         title="Order Status Updated",
-                        message=f"Order #{order_obj.order_id}: {status_messages[new_status]}"
+                        message=f"Order #{order_obj.order_id}: {status_messages[new_status]}",
                     )
                     await self.notification_service.PUSH_NOTIFICATIONS(
                         db=db,
                         to_user_id=order_obj.customer_id,
                         notification_content=notification_data,
-                        by_user_id=None
+                        by_user_id=None,
                     )
             except Exception as e:
                 print(f"[UPDATE_ORDER_STATUS] Failed to send notification: {e}")
-            
+
             return order_obj
         except HTTPException:
             raise
@@ -1307,6 +1781,20 @@ class OrderService:
             )
 
     async def SOFT_DELETE_ORDER(self, db: AsyncSession, order_id: int, deleted_by: int):
+        """
+        Soft delete an order (mark as deleted without permanent removal).
+
+        Args:
+            db: Database session
+            order_id: Order ID to delete
+            deleted_by: User ID performing the deletion
+
+        Returns:
+            Dictionary with deletion confirmation message and order_id
+
+        Raises:
+            HTTPException (404): If order not found
+        """
         try:
             result = await db.execute(
                 select(Order).filter(
@@ -1332,6 +1820,19 @@ class OrderService:
             )
 
     async def GET_ORDER_ITEMS(self, order_id: int, db: AsyncSession):
+        """
+        Get all items in a specific order.
+
+        Args:
+            order_id: Order ID to get items for
+            db: Database session
+
+        Returns:
+            List of OrderItem objects
+
+        Raises:
+            HTTPException (404): If order not found or has no items
+        """
         try:
             results = await db.execute(
                 select(OrderItem).filter(OrderItem.order_id == order_id)
@@ -1352,6 +1853,20 @@ class OrderService:
     async def ADD_ORDER_ITEM(
         self, order_id: int, order_item: OrderItemCreate, db: AsyncSession
     ):
+        """
+        Add a new item to an existing order.
+
+        Args:
+            order_id: Order ID to add item to
+            order_item: Order item creation data (batch_id, quantity, price)
+            db: Database session
+
+        Returns:
+            Created OrderItem object
+
+        Raises:
+            HTTPException (404): If order or batch not found
+        """
         try:
             result = await db.execute(select(Order).filter(Order.order_id == order_id))
             order_obj = result.scalar_one_or_none()
@@ -1387,6 +1902,20 @@ class OrderService:
     async def UPDATE_ORDER_ITEM(
         self, db: AsyncSession, order_item_id: int, order_item: OrderItemUpdate
     ):
+        """
+        Update an existing order item (quantity and/or price).
+
+        Args:
+            db: Database session
+            order_item_id: Order item ID to update
+            order_item: Order item update data (quantity, price)
+
+        Returns:
+            Updated OrderItem object
+
+        Raises:
+            HTTPException (404): If order item not found
+        """
         try:
             result = await db.execute(
                 select(OrderItem).filter(OrderItem.order_item_id == order_item_id)
@@ -1412,6 +1941,20 @@ class OrderService:
     async def SOFT_DELETE_ORDER_ITEM(
         self, db: AsyncSession, order_item_id: int, deleted_by: int
     ):
+        """
+        Soft delete an order item (mark as deleted without permanent removal).
+
+        Args:
+            db: Database session
+            order_item_id: Order item ID to delete
+            deleted_by: User ID performing the deletion
+
+        Returns:
+            Dictionary with deletion confirmation message
+
+        Raises:
+            HTTPException (404): If order item not found or already deleted
+        """
         try:
             result = await db.execute(
                 select(OrderItem).filter(OrderItem.order_item_id == order_item_id)

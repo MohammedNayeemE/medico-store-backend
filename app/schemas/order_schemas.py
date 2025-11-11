@@ -234,3 +234,9 @@ class OrderDetailsResponse(BaseModel):
     order_items: List[OrderItemInfo]
     invoice: Optional[InvoiceInfo]
     payments: List[PaymentInfo]
+
+
+class InitiatePaymentRequest(BaseModel):
+    request_order_id: int
+    payment_mode: str
+    delivery_address_id: Optional[int] = None  # ✅ new optional field

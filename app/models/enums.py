@@ -49,14 +49,13 @@ class RequestStatusEnum(str, Enum):
 
 
 class RequestOrderStatusEnum(str, Enum):
-    pending = "pending"  
-    approved = "approved"  
-    awaiting_payment = (
-        "awaiting_payment" 
-    )
-    converted = "converted"  
-    rejected = "rejected"  
+    pending = "pending"
+    pending_customer_confirmation = "pending_customer_confirmation"
+    approved = "approved"
+    rejected = "rejected"
+    customer_rejected = "customer_rejected"
     cancelled = "cancelled"
+    converted_to_order = "converted_to_order"
 
 
 class NotificationType(str, Enum):
@@ -67,6 +66,7 @@ class NotificationType(str, Enum):
 
 class ReportTypeEnum(str, Enum):
     """Types of reports available"""
+
     # Sales & Revenue
     daily_sales_summary = "daily_sales_summary"
     weekly_sales_summary = "weekly_sales_summary"
@@ -79,7 +79,7 @@ class ReportTypeEnum(str, Enum):
     profit_margin_analysis = "profit_margin_analysis"
     discount_impact_analysis = "discount_impact_analysis"
     coupon_effectiveness = "coupon_effectiveness"
-    
+
     # Inventory
     stock_level_report = "stock_level_report"
     low_stock_alert = "low_stock_alert"
@@ -89,7 +89,7 @@ class ReportTypeEnum(str, Enum):
     inventory_valuation = "inventory_valuation"
     stock_movement = "stock_movement"
     medicine_turnover_ratio = "medicine_turnover_ratio"
-    
+
     # Order Management
     order_status_summary = "order_status_summary"
     order_fulfillment_rate = "order_fulfillment_rate"
@@ -99,7 +99,7 @@ class ReportTypeEnum(str, Enum):
     cancelled_orders_analysis = "cancelled_orders_analysis"
     delivery_performance = "delivery_performance"
     payment_status_report = "payment_status_report"
-    
+
     # Customer Analytics
     new_customer_acquisition = "new_customer_acquisition"
     customer_segmentation = "customer_segmentation"
@@ -108,7 +108,7 @@ class ReportTypeEnum(str, Enum):
     prescription_upload_trends = "prescription_upload_trends"
     customer_geographic_distribution = "customer_geographic_distribution"
     customer_lifetime_value = "customer_lifetime_value"
-    
+
     # Operational
     medicine_request_analysis = "medicine_request_analysis"
     prescription_verification = "prescription_verification"
@@ -116,7 +116,7 @@ class ReportTypeEnum(str, Enum):
     issue_resolution_time = "issue_resolution_time"
     staff_performance = "staff_performance"
     peak_hours_analysis = "peak_hours_analysis"
-    
+
     # Financial
     gst_report = "gst_report"
     invoice_summary = "invoice_summary"
@@ -128,6 +128,7 @@ class ReportTypeEnum(str, Enum):
 
 class ReportFormatEnum(str, Enum):
     """Report export formats"""
+
     pdf = "pdf"
     excel = "excel"
     csv = "csv"
@@ -136,6 +137,7 @@ class ReportFormatEnum(str, Enum):
 
 class ReportStatusEnum(str, Enum):
     """Report generation status"""
+
     pending = "pending"
     processing = "processing"
     completed = "completed"
