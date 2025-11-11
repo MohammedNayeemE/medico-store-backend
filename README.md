@@ -128,7 +128,7 @@ Before you begin, ensure you have the following installed on your system:
 ### Optional but Recommended
 - **Docker & Docker Compose**: For containerized deployment
 - **Postman or Insomnia**: For API testing
-- **VS Code or PyCharm**: For development
+- **Nvim**: For development
 
 ### System Requirements
 - **RAM**: Minimum 4GB (8GB recommended)
@@ -142,8 +142,8 @@ Before you begin, ensure you have the following installed on your system:
 ### Step 1: Clone the Repository
 
 ```bash
-git clone <repository-url>
-cd epms-backend
+git clone https://github.com/MohammedNayeemE/medico-store-backend.git 
+cd medico-store-backend 
 ```
 
 ### Step 2: Create Virtual Environment
@@ -185,6 +185,9 @@ See the [Environment Variables](#6-environment-variables) section for required c
 # Install PostgreSQL (if not already installed)
 # Ubuntu/Debian:
 sudo apt-get install postgresql postgresql-contrib
+
+# Fedora
+sudo dnf install postgresql
 
 # macOS (using Homebrew):
 brew install postgresql
@@ -626,7 +629,7 @@ We welcome contributions! Please follow these guidelines:
 ### Getting Started
 
 1. **Fork the repository**
-2. **Clone your fork**: `git clone https://github.com/your-username/epms-backend.git`
+2. **Clone your fork**: `git clone https://github.com/MohammedNayeemE/medico-store-backend.git`
 3. **Create a branch**: `git checkout -b feature/your-feature-name`
 4. **Make your changes**
 5. **Test your changes**: Ensure all tests pass
@@ -651,6 +654,7 @@ We welcome contributions! Please follow these guidelines:
      - `refactor:` for code refactoring
      - `test:` for tests
      - `chore:` for maintenance
+   - using git emojis is recommended
 
 3. **Pull Request Process**
    - Provide a clear description of changes
@@ -684,32 +688,6 @@ We welcome contributions! Please follow these guidelines:
 
 ---
 
-## 11. License
-
-[Specify your license here]
-
-Example licenses:
-- MIT License
-- Apache License 2.0
-- GNU GPL v3
-
-**Note**: Please add the appropriate license file (LICENSE) to the repository root.
-
----
-
-## 12. Contact
-
-### Project Maintainers
-
-- **Name**: [Your Name]
-- **Email**: [your.email@example.com]
-- **GitHub**: [@your-username]
-
-### Support
-
-- **Issues**: [GitHub Issues](https://github.com/your-username/epms-backend/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/your-username/epms-backend/discussions)
-- **Documentation**: See `/docs` directory for detailed documentation
 
 ### Additional Resources
 

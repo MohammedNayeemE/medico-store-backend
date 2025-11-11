@@ -649,7 +649,9 @@ class OrderService:
             if request_order.prescription:
                 prescription_info = {
                     "prescription_id": request_order.prescription.prescription_id,
-                    "file_url": f"http://localhost:8000/api/v1/files/assets/{request_order.prescription.asset_id}",
+                    "file_url": self._attach_file_url(
+                        request_order.prescription.asset_id
+                    ),
                 }
             response = {
                 "request_order_id": request_order.request_order_id,
