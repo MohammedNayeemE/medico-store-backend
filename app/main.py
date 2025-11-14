@@ -39,6 +39,7 @@ from app.api.routes import (
 from app.api.routes.inventory import router as inventory_router
 from app.core.config import allowed_origins, settings
 from app.core.database import Base, close_redis, engine, init_redis
+from app.middlewares.exception_middleware import ExceptionMiddleware
 from app.middlewares.logging_middleware import LoggingMiddleware
 from app.models.inventory_management_models import *
 from app.models.order_management_models import *
@@ -74,6 +75,7 @@ app.add_middleware(
 )
 app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=2)
 app.add_middleware(LoggingMiddleware)
+app.add_middleware(ExceptionMiddleware)
 
 
 @app.on_event("startup")

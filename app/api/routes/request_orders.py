@@ -6,6 +6,7 @@ from fastapi import (
     Body,
     Depends,
     File,
+    HTTPException,
     Path,
     Query,
     Security,
@@ -213,6 +214,7 @@ async def change_status_of_request_order(
 @router.post(
     "/{request_order_id}/notify-payment",
     description="Send payment notification to customer",
+    include_in_schema=False,
 )
 async def notify_payment(
     background_tasks: BackgroundTasks,

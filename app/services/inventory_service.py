@@ -13,13 +13,12 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from motor.motor_asyncio import AsyncIOMotorGridFSBucket
 from openpyxl import Workbook
 from pandas.core.api import notna
-from pydantic_settings.sources.providers.aws import import_aws_secrets_manager
 from sqlalchemy import and_, asc, desc, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, joinedload, selectinload
 
 from app.api.dependecies.get_db_sessions import get_redis_client
-from app.core.database import async_session  # ✅ your async session factory
+from app.core.database import async_session
 from app.core.exceptions import (
     BadRequestException,
     InternalServerErrorException,
@@ -86,7 +85,7 @@ class InventoryManagementService:
         Args:
             medicine_id: Unique identifier of the medicine to reallocate stock for
         """
-        async with async_session() as db:  # ✅ create fresh session for background task
+        async with async_session() as db:
             try:
                 print(
                     f"[Reallocation] Starting reallocation for medicine_id={medicine_id}"
@@ -1453,7 +1452,6 @@ class InventoryManagementService:
             res = await db.execute(q)
             batches = res.scalars().all()
             print(f"[Inventory] Found {len(batches)} expired batches")
-
             # Send notifications to admin about expired batches
             if batches:
                 try:
@@ -1468,7 +1466,6 @@ class InventoryManagementService:
                         .limit(10)
                     )
                     admin_ids = [row[0] for row in admin_result.all()]
-
                     # Get medicine names for batches
                     medicine_ids = list(set([b.medicine_id for b in batches]))
                     med_result = await db.execute(
@@ -1477,7 +1474,6 @@ class InventoryManagementService:
                         )
                     )
                     medicine_map = {row[0]: row[1] for row in med_result.all()}
-
                     # Group batches by medicine
                     expired_medicines = {}
                     for batch in batches:
@@ -1488,7 +1484,6 @@ class InventoryManagementService:
                                 "count": 0,
                             }
                         expired_medicines[med_id]["count"] += 1
-
                     # Send notification for each expired medicine
                     for admin_id in admin_ids:
                         for med_id, info in expired_medicines.items():
@@ -1507,7 +1502,6 @@ class InventoryManagementService:
                             )
                 except Exception as e:
                     print(f"[GET_EXPIRED_BATCHES] Failed to send notification: {e}")
-
             return batches
         except Exception as e:
             print(f"[Inventory Error] GET_EXPIRED_BATCHES failed: {e}")
@@ -1541,7 +1535,6 @@ class InventoryManagementService:
             print(
                 f"[Inventory] Found {len(batches)} batches expiring within {days} days"
             )
-
             # Send notifications to admin about expiring soon batches
             if batches:
                 try:
@@ -1556,7 +1549,6 @@ class InventoryManagementService:
                         .limit(10)
                     )
                     admin_ids = [row[0] for row in admin_result.all()]
-
                     # Get medicine names for batches
                     medicine_ids = list(set([b.medicine_id for b in batches]))
                     med_result = await db.execute(
@@ -1565,7 +1557,6 @@ class InventoryManagementService:
                         )
                     )
                     medicine_map = {row[0]: row[1] for row in med_result.all()}
-
                     # Group batches by medicine
                     expiring_medicines = {}
                     for batch in batches:
@@ -1584,7 +1575,6 @@ class InventoryManagementService:
                             expiring_medicines[med_id][
                                 "earliest_expiry"
                             ] = batch.expiry_date
-
                     # Send notification for each expiring medicine
                     for admin_id in admin_ids:
                         for med_id, info in expiring_medicines.items():
@@ -1603,7 +1593,6 @@ class InventoryManagementService:
                             )
                 except Exception as e:
                     print(f"[GET_EXPIRING_SOON] Failed to send notification: {e}")
-
             return batches
         except Exception as e:
             print(f"[Inventory Error] GET_EXPIRING_SOON failed: {e}")
@@ -1620,7 +1609,6 @@ class InventoryManagementService:
         """
         try:
             print("[Inventory] Fetching stock summary (paginated)")
-
             q = (
                 select(
                     Medicine.medicine_id,
@@ -1637,13 +1625,10 @@ class InventoryManagementService:
                 .offset(skip)
                 .limit(limit)
             )
-
             res = await db.execute(q)
             summary = res.mappings().all()
-
             print(f"[Inventory] Retrieved {len(summary)} stock summary records")
             return summary
-
         except Exception as e:
             print(f"[Inventory Error] GET_STOCK_SUMMARY failed: {e}")
             await db.rollback()
