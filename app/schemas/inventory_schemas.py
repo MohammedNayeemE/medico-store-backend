@@ -61,6 +61,11 @@ class MedicineCreate(BaseModel):
         example=[7, 8],
         description="List of alternative medicine IDs",
     )
+    use_case_ids: Optional[List[conint(gt=0)]] = Field(
+        default_factory=list,
+        example=[1, 2],
+        description="List of use case IDs",
+    )
 
     @field_validator("medicine_name")
     def no_special_chars(cls, v):
@@ -165,6 +170,25 @@ class AlternativeCreate(BaseModel):
 class AlternativeResponse(AlternativeCreate):
     alternative_id: int = Field(..., example=10)
     model_config = ConfigDict(from_attributes=True)
+
+
+class UseCaseCreate(BaseModel):
+    use_case: constr(min_length=2, max_length=255) = Field(
+        ..., example="Pain Relief", description="Name of the medicine use case"
+    )
+
+
+class UseCaseResponse(UseCaseCreate):
+    use_case_id: int = Field(..., example=1)
+    model_config = ConfigDict(from_attributes=True)
+
+
+class UseCaseLinkCreate(BaseModel):
+    use_case_ids: List[conint(gt=0)] = Field(
+        ...,
+        example=[1, 2],
+        description="List of use case IDs to link to the medicine",
+    )
 
 
 class GSTSlabCreate(BaseModel):

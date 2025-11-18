@@ -36,8 +36,10 @@ from app.models.inventory_management_models import (
     MedicineImage,
     MedicineSideEffect,
     MedicineTag,
+    MedicineUseCase,
     SideEffect,
     Tag,
+    UseCase,
 )
 from app.models.order_management_models import OrderItem, RequestOrderItem
 from app.models.user_management_models import FileAsset, User
@@ -53,6 +55,9 @@ from app.schemas.inventory_schemas import (
     SideEffectResponse,
     TagCreate,
     TagResponse,
+    UseCaseCreate,
+    UseCaseLinkCreate,
+    UseCaseResponse,
 )
 from app.schemas.notification_schemas import NotificationCreate
 from app.services.cache_service import CacheService
@@ -331,6 +336,12 @@ class InventoryManagementService:
                         medicine_id=new_medicine.medicine_id, alternative_id=alt_id
                     )
                     db.add(new_med_alt)
+            if medicine_data.use_case_ids:
+                for uc_id in medicine_data.use_case_ids:
+                    new_med_uc = MedicineUseCase(
+                        medicine_id=new_medicine.medicine_id, use_case_id=uc_id
+                    )
+                    db.add(new_med_uc)
             await db.commit()
             await db.refresh(new_medicine)
             return new_medicine
@@ -503,6 +514,7 @@ class InventoryManagementService:
         name: str | None = None,
         category: str | None = None,
         tag: str | None = None,
+        use_case: str | None = None,
         min_price: float | None = None,
         max_price: float | None = None,
         sort_by: str | None = None,
@@ -512,7 +524,7 @@ class InventoryManagementService:
     ):
         try:
             cache_key = (
-                f"medicines:{name}:{category}:{tag}:{min_price}:{max_price}:"
+                f"medicines:{name}:{category}:{tag}:{use_case}:{min_price}:{max_price}:"
                 f"{sort_by}:{sort_order}:{skip}:{limit}"
             )
             cached_data = await self.cache_service.get_cache(cache_key)
@@ -550,6 +562,7 @@ class InventoryManagementService:
                     joinedload(Medicine.tags),
                     joinedload(Medicine.side_effects),
                     joinedload(Medicine.alternatives),
+                    joinedload(Medicine.use_cases),
                     joinedload(Medicine.gst_slab),
                 )
                 .where(Medicine.is_deleted == False)
@@ -567,6 +580,10 @@ class InventoryManagementService:
                 )
             if tag:
                 query = query.join(Medicine.tags).where(Tag.name.ilike(f"%{tag}%"))
+            if use_case:
+                query = query.join(Medicine.use_cases).where(
+                    UseCase.use_case.ilike(f"%{use_case}%")
+                )
             if min_price is not None:
                 query = query.where(batch_subq.c.selling_price >= min_price)
             if max_price is not None:
@@ -625,6 +642,7 @@ class InventoryManagementService:
             "tags": [t.name for t in medicine.tags],
             "side_effects": [s.side_effect for s in medicine.side_effects],
             "alternatives": [a.name for a in medicine.alternatives],
+            "use_cases": [uc.use_case for uc in medicine.use_cases],
             "created_at": str(medicine.created_at),
             "is_prescribed": medicine.is_prescribed,
             "updated_at": str(medicine.updated_at),
@@ -650,6 +668,7 @@ class InventoryManagementService:
                     joinedload(Medicine.tags),
                     joinedload(Medicine.side_effects),
                     joinedload(Medicine.alternatives),
+                    joinedload(Medicine.use_cases),
                     joinedload(Medicine.gst_slab),
                     joinedload(Medicine.batches),  # All batches
                 )
@@ -714,6 +733,7 @@ class InventoryManagementService:
             "tags": [t.name for t in medicine.tags],
             "side_effects": [s.side_effect for s in medicine.side_effects],
             "alternatives": [a.name for a in medicine.alternatives],
+            "use_cases": [uc.use_case for uc in medicine.use_cases],
             "gst_slab": (
                 float(medicine.gst_slab.gst_rate) if medicine.gst_slab else None
             ),
@@ -740,6 +760,7 @@ class InventoryManagementService:
                     joinedload(Medicine.tags),
                     joinedload(Medicine.side_effects),
                     joinedload(Medicine.alternatives),
+                    joinedload(Medicine.use_cases),
                 )
                 .where(
                     Medicine.medicine_id == medicine_id,
@@ -792,6 +813,10 @@ class InventoryManagementService:
             ],
             "alternatives": [
                 {"id": a.alternative_id} for a in (medicine.alternatives or [])
+            ],
+            "use_cases": [
+                {"id": uc.use_case_id, "name": uc.use_case}
+                for uc in (medicine.use_cases or [])
             ],
         }
 
@@ -861,6 +886,7 @@ class InventoryManagementService:
                     selectinload(Medicine.tags),
                     selectinload(Medicine.side_effects),
                     selectinload(Medicine.alternatives),
+                    selectinload(Medicine.use_cases),
                 )
                 .filter(Medicine.medicine_id == medicine_id)
             )
@@ -907,6 +933,13 @@ class InventoryManagementService:
                     )
                 )
                 medicine.alternatives = result.scalars().all()
+            if getattr(medicine_data, "use_case_ids", None) is not None:
+                result = await db.execute(
+                    select(UseCase).filter(
+                        UseCase.use_case_id.in_(medicine_data.use_case_ids)
+                    )
+                )
+                medicine.use_cases = result.scalars().all()
             await db.commit()
             await db.refresh(medicine)
             return medicine
@@ -1979,6 +2012,438 @@ class InventoryManagementService:
             print(f"[get_tag_details] : {e}")
             raise HTTPException(
                 status_code=500, detail="internal server error : [get_tag_details]"
+            )
+
+    async def DOWNLOAD_USE_CASE_TEMPLATE(self):
+        try:
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Use Case Template"
+            headers = ["use_case"]
+            example_row = ["Pain Relief"]
+            ws.append(headers)
+            ws.append(example_row)
+            output = io.BytesIO()
+            wb.save(output)
+            output.seek(0)
+            return StreamingResponse(
+                output,
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={
+                    "Content-Disposition": "attachment; filename=use_case_template.xlsx"
+                },
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            print("===================================")
+            print(f"[DOWNLOAD_USE_CASE_TEMPLATE] Error: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail="internal server error : [DOWNLOAD_USE_CASE_TEMPLATE]",
+            )
+
+    async def BULK_UPLOAD_USE_CASES(self, db: AsyncSession, file: UploadFile):
+        try:
+            ext = os.path.splitext(file.filename)[1].lower()
+            if ext not in self.ALLOWED_EXTENSIONS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unsupported file type. Allowed: {', '.join(self.ALLOWED_EXTENSIONS)}",
+                )
+            file_content = await file.read()
+            file_size_mb = len(file_content) / (1024 * 1024)
+            if file_size_mb > self.MAX_FILE_SIZE_MB:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"File too large. Max allowed size is {self.MAX_FILE_SIZE_MB} MB.",
+                )
+            try:
+                if ext == ".csv":
+                    df = pd.read_csv(io.BytesIO(file_content))
+                else:
+                    df = pd.read_excel(io.BytesIO(file_content))
+            except Exception as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Failed to parse the file: {str(e)}",
+                )
+            required_columns = ["use_case"]
+            missing_cols = [col for col in required_columns if col not in df.columns]
+            if missing_cols:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Missing required column(s): {', '.join(missing_cols)}",
+                )
+            inserted, errors = [], []
+            for index, row in df.iterrows():
+                try:
+                    use_case_name = str(row["use_case"]).strip()
+                    if not use_case_name or pd.isna(use_case_name):
+                        continue
+                    existing = await db.execute(
+                        select(UseCase).filter(UseCase.use_case == use_case_name)
+                    )
+                    if existing.scalar_one_or_none():
+                        errors.append(
+                            {
+                                "row": index + 1,
+                                "error": f"Use case '{use_case_name}' already exists",
+                            }
+                        )
+                        continue
+                    new_use_case = UseCase(use_case=use_case_name)
+                    db.add(new_use_case)
+                    inserted.append(use_case_name)
+                except Exception as e:
+                    errors.append({"row": index + 1, "error": str(e)})
+            await db.commit()
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "msg": {
+                        "inserted": len(inserted),
+                        "errors": errors,
+                        "total_rows": len(df),
+                    }
+                },
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            print("-------------------------------------------")
+            print(f"[BULK_UPLOAD_USE_CASES] : {e}")
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+    async def CREATE_USE_CASE(self, db: AsyncSession, use_case_data: UseCaseCreate):
+        try:
+            result = await db.execute(
+                select(UseCase).filter(UseCase.use_case == use_case_data.use_case)
+            )
+            use_case_obj = result.scalar_one_or_none()
+            if use_case_obj:
+                raise HTTPException(
+                    status_code=400,
+                    detail="the use case already exists, please provide a unique name",
+                )
+            new_use_case = UseCase(use_case=use_case_data.use_case)
+            db.add(new_use_case)
+            await db.commit()
+            await db.refresh(new_use_case)
+            return new_use_case
+        except HTTPException:
+            raise
+        except Exception as e:
+            print("-----------------------------")
+            print(f"[create_use_case] : {e}")
+            raise HTTPException(
+                status_code=500, detail="internal server error : [create_use_case]"
+            )
+
+    async def GET_ALL_USE_CASES(
+        self, db: AsyncSession, skip: int = 0, limit: int = 10
+    ):
+        try:
+            result = await db.execute(
+                select(UseCase)
+                .filter(UseCase.is_deleted == False)
+                .offset(skip)
+                .limit(limit)
+            )
+            use_cases_obj = result.scalars().all()
+            count_result = await db.execute(
+                select(func.count()).filter(UseCase.is_deleted == False)
+            )
+            total = len(count_result.scalars().all())
+            data = [
+                UseCaseResponse.from_orm(uc).model_dump() for uc in use_cases_obj
+            ]
+            return JSONResponse(
+                status_code=200,
+                content={"msg": {"totalCount": total, "data": data}},
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            print("--------------------")
+            print(f"[get_all_use_cases] : {e}")
+            raise HTTPException(
+                status_code=500, detail="internal server error: [get_all_use_cases]"
+            )
+
+    async def GET_USE_CASE_BY_ID(self, db: AsyncSession, use_case_id: int):
+        try:
+            result = await db.execute(
+                select(UseCase).filter(UseCase.use_case_id == use_case_id)
+            )
+            use_case = result.scalar_one_or_none()
+            if not use_case or use_case.is_deleted:
+                raise HTTPException(status_code=404, detail="Use case not found")
+            return use_case
+        except HTTPException:
+            raise
+        except Exception as e:
+            print("--------------------")
+            print(f"[get_use_case_by_id] : {e}")
+            raise HTTPException(
+                status_code=500, detail="internal server error: [get_use_case_by_id]"
+            )
+
+    async def UPDATE_USE_CASE(
+        self, db: AsyncSession, use_case_id: int, use_case_data: UseCaseCreate
+    ):
+        try:
+            result = await db.execute(
+                select(UseCase).filter(UseCase.use_case_id == use_case_id)
+            )
+            use_case = result.scalar_one_or_none()
+            if not use_case or use_case.is_deleted:
+                raise HTTPException(status_code=404, detail="Use case not found")
+            if use_case_data.use_case:
+                existing = await db.execute(
+                    select(UseCase).filter(
+                        UseCase.use_case == use_case_data.use_case,
+                        UseCase.use_case_id != use_case_id,
+                    )
+                )
+                if existing.scalar_one_or_none():
+                    raise HTTPException(
+                        status_code=400, detail="Use case name already exists."
+                    )
+                use_case.use_case = use_case_data.use_case
+            await db.commit()
+            await db.refresh(use_case)
+            return use_case
+        except HTTPException:
+            raise
+        except Exception as e:
+            print("--------------------")
+            print(f"[update_use_case] : {e}")
+            raise HTTPException(
+                status_code=500, detail="internal server error: [update_use_case]"
+            )
+
+    async def SOFT_DELETE_USE_CASE(
+        self, db: AsyncSession, use_case_id: int, deleted_by: int
+    ):
+        try:
+            result = await db.execute(
+                select(UseCase).filter(UseCase.use_case_id == use_case_id)
+            )
+            use_case = result.scalar_one_or_none()
+            if not use_case or use_case.is_deleted:
+                raise HTTPException(status_code=404, detail="Use case not found")
+            use_case.is_deleted = True
+            use_case.deleted_at = datetime.utcnow()
+            use_case.deleted_by = deleted_by
+            await db.commit()
+            return JSONResponse(
+                status_code=200,
+                content={"msg": f"{use_case_id} deleted successfully by {deleted_by}"},
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            print("--------------------")
+            print(f"[soft_delete_use_case] : {e}")
+            raise HTTPException(
+                status_code=500, detail="internal server error: [soft_delete_use_case]"
+            )
+
+    async def LINK_MEDICINE_USE_CASES(
+        self, db: AsyncSession, medicine_id: int, use_case_data: UseCaseLinkCreate
+    ):
+        try:
+            medicine_q = await db.execute(
+                select(Medicine).filter(
+                    Medicine.medicine_id == medicine_id, Medicine.is_deleted == False
+                )
+            )
+            medicine_obj = medicine_q.scalars().first()
+            if not medicine_obj:
+                raise HTTPException(status_code=404, detail="Medicine not found")
+            if len(use_case_data.use_case_ids) == 0:
+                raise BadRequestException("no use_case_ids provided")
+            use_case_ids: List[int] = use_case_data.use_case_ids
+            valid_use_cases_q = await db.execute(
+                select(UseCase.use_case_id).filter(
+                    UseCase.use_case_id.in_(use_case_ids),
+                    UseCase.is_deleted == False,
+                )
+            )
+            valid_use_case_ids = {row[0] for row in valid_use_cases_q.all()}
+            invalid_ids = set(use_case_ids) - valid_use_case_ids
+            if invalid_ids:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Invalid use_case_ids: {list(invalid_ids)}",
+                )
+            existing_links = await db.execute(
+                select(MedicineUseCase).filter(
+                    MedicineUseCase.medicine_id == medicine_id,
+                    MedicineUseCase.is_deleted == False,
+                )
+            )
+            for link in existing_links.scalars().all():
+                link.is_deleted = True
+                link.deleted_at = datetime.utcnow()
+            for uc_id in use_case_ids:
+                existing = await db.execute(
+                    select(MedicineUseCase).filter(
+                        MedicineUseCase.medicine_id == medicine_id,
+                        MedicineUseCase.use_case_id == uc_id,
+                    )
+                )
+                existing_link = existing.scalar_one_or_none()
+                if existing_link:
+                    if existing_link.is_deleted:
+                        existing_link.is_deleted = False
+                        existing_link.deleted_at = None
+                        existing_link.deleted_by = None
+                else:
+                    new_link = MedicineUseCase(
+                        medicine_id=medicine_id, use_case_id=uc_id
+                    )
+                    db.add(new_link)
+            await db.commit()
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "msg": f"Medicine {medicine_id} linked to use cases: {use_case_ids}"
+                },
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            print("-----------------------------")
+            print(f"[link_medicine_use_cases] : {e}")
+            await db.rollback()
+            raise HTTPException(
+                status_code=500, detail="internal server error : [link_medicine_use_cases]"
+            )
+
+    async def LIST_ALL_MEDICINE_USE_CASES(
+        self, db: AsyncSession, medicine_id: int
+    ):
+        try:
+            medicine_q = await db.execute(
+                select(Medicine).filter(
+                    Medicine.medicine_id == medicine_id, Medicine.is_deleted == False
+                )
+            )
+            medicine_obj = medicine_q.scalars().first()
+            if not medicine_obj:
+                raise HTTPException(status_code=404, detail="Medicine not found")
+            result = await db.execute(
+                select(UseCase)
+                .join(MedicineUseCase, UseCase.use_case_id == MedicineUseCase.use_case_id)
+                .filter(
+                    MedicineUseCase.medicine_id == medicine_id,
+                    MedicineUseCase.is_deleted == False,
+                    UseCase.is_deleted == False,
+                )
+            )
+            use_cases = result.scalars().all()
+            data = [UseCaseResponse.from_orm(uc).model_dump() for uc in use_cases]
+            return JSONResponse(
+                status_code=200,
+                content={"msg": {"medicine_id": medicine_id, "use_cases": data}},
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            print("-----------------------------")
+            print(f"[list_all_medicine_use_cases] : {e}")
+            raise HTTPException(
+                status_code=500,
+                detail="internal server error : [list_all_medicine_use_cases]",
+            )
+
+    async def UPDATE_LINK_MEDICINES_TO_USE_CASES(
+        self,
+        db: AsyncSession,
+        use_case_ids: List[int],
+        medicine_id: int,
+        deleted_by: int,
+    ):
+        try:
+            medicine_q = await db.execute(
+                select(Medicine).filter(
+                    Medicine.medicine_id == medicine_id, Medicine.is_deleted == False
+                )
+            )
+            medicine_obj = medicine_q.scalars().first()
+            if not medicine_obj:
+                raise HTTPException(status_code=404, detail="Medicine not found")
+            if not use_case_ids:
+                existing_links = await db.execute(
+                    select(MedicineUseCase).filter(
+                        MedicineUseCase.medicine_id == medicine_id,
+                        MedicineUseCase.is_deleted == False,
+                    )
+                )
+                for link in existing_links.scalars().all():
+                    link.is_deleted = True
+                    link.deleted_at = datetime.utcnow()
+                    link.deleted_by = deleted_by
+                await db.commit()
+                return JSONResponse(
+                    status_code=200,
+                    content={"msg": "All use case links removed for medicine"},
+                )
+            valid_use_cases_q = await db.execute(
+                select(UseCase.use_case_id).filter(
+                    UseCase.use_case_id.in_(use_case_ids),
+                    UseCase.is_deleted == False,
+                )
+            )
+            valid_use_case_ids = {row[0] for row in valid_use_cases_q.all()}
+            invalid_ids = set(use_case_ids) - valid_use_case_ids
+            if invalid_ids:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Invalid use_case_ids: {list(invalid_ids)}",
+                )
+            existing_links_q = await db.execute(
+                select(MedicineUseCase).filter(
+                    MedicineUseCase.medicine_id == medicine_id
+                )
+            )
+            existing_links = {link.use_case_id: link for link in existing_links_q.scalars().all()}
+            target_ids = set(use_case_ids)
+            for uc_id, link in existing_links.items():
+                if uc_id in target_ids:
+                    if link.is_deleted:
+                        link.is_deleted = False
+                        link.deleted_at = None
+                        link.deleted_by = None
+                else:
+                    if not link.is_deleted:
+                        link.is_deleted = True
+                        link.deleted_at = datetime.utcnow()
+                        link.deleted_by = deleted_by
+            for uc_id in target_ids:
+                if uc_id not in existing_links:
+                    new_link = MedicineUseCase(
+                        medicine_id=medicine_id, use_case_id=uc_id
+                    )
+                    db.add(new_link)
+            await db.commit()
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "msg": f"Medicine {medicine_id} use cases updated to: {use_case_ids}"
+                },
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            print("-----------------------------")
+            print(f"[update_link_medicines_to_use_cases] : {e}")
+            await db.rollback()
+            raise HTTPException(
+                status_code=500,
+                detail="internal server error : [update_link_medicines_to_use_cases]",
             )
 
     async def CREATE_SIDE_EFFECT(

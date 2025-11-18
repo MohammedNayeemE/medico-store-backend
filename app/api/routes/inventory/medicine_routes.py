@@ -142,6 +142,7 @@ async def get_all_medicines(
     search: Optional[str] = Query(None, description="Search by name or description"),
     category: Optional[str] = Query(None),
     tag: Optional[str] = Query(None),
+    use_case: Optional[str] = Query(None, description="Filter by use case"),
     min_price: Optional[float] = Query(None),
     max_price: Optional[float] = Query(None),
     sort_by: Optional[str] = Query("name", description="Sort by 'price' or 'name'"),
@@ -150,13 +151,14 @@ async def get_all_medicines(
     limit: int = Query(10, le=100),
 ):
     """
-    Get paginated list of medicines with optional filters (search, category, tag, price range).
+    Get paginated list of medicines with optional filters (search, category, tag, use_case, price range).
     
     Args:
         db: Database session
         search: Search term for medicine name or description
         category: Filter by category
         tag: Filter by tag
+        use_case: Filter by use case
         min_price: Minimum price filter
         max_price: Maximum price filter
         sort_by: Sort field (price or name)
@@ -172,6 +174,7 @@ async def get_all_medicines(
         name=search,
         category=category,
         tag=tag,
+        use_case=use_case,
         sort_by=sort_by,
         sort_order=order,
         skip=skip,

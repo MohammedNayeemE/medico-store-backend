@@ -10,6 +10,7 @@ from . import (
     medicine_routes,
     side_effects_routes,
     tags_routes,
+    use_cases_routes,
 )
 
 router = APIRouter(prefix="/inventory" , dependencies=[Depends(RateLimiter(times=100 , seconds=60))])
@@ -28,3 +29,4 @@ router.include_router(alternates_routes.router)
 router.include_router(bacthes_routes.router)
 router.include_router(side_effects_routes.router)
 router.include_router(gst_routes.router)
+router.include_router(use_cases_routes.router)

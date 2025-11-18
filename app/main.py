@@ -30,6 +30,7 @@ from app.api.routes import (
     payment_routes,
     prescriptions,
     profile_routes,
+    recommendation_routes,
     report_routes,
     request_medicines_routes,
     request_orders,
@@ -286,3 +287,4 @@ app.include_router(router=content_routes.router)
 app.include_router(router=dashboard_routes.router)
 app.include_router(router=audit_logs_routes.router)
 app.include_router(router=report_routes.router)
+app.include_router(router=recommendation_routes.router)

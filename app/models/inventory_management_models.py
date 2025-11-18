@@ -78,6 +78,21 @@ class Alternative(Base):
     )
 
 
+class UseCase(Base):
+    __tablename__ = "use_cases"
+
+    use_case_id = Column(Integer, primary_key=True, autoincrement=True)
+    use_case = Column(String(255), unique=True, nullable=False, index=True)
+
+    is_deleted = Column(Boolean, nullable=False, default=False)
+    deleted_at = Column(TIMESTAMP)
+    deleted_by = Column(Integer, ForeignKey("users.user_id", onupdate="CASCADE"))
+
+    medicines = relationship(
+        "Medicine", secondary="medicine_use_cases", back_populates="use_cases"
+    )
+
+
 class GSTSlab(Base):
     __tablename__ = "gst_slabs"
 
@@ -139,6 +154,10 @@ class Medicine(Base):
         "Alternative", secondary="medicine_alternatives", back_populates="medicines"
     )
 
+    use_cases = relationship(
+        "UseCase", secondary="medicine_use_cases", back_populates="medicines"
+    )
+
     batches = relationship("MedicineBatch", back_populates="medicine")
 
     medicine_requests = relationship(
@@ -175,6 +194,25 @@ class MedicineCategory(Base):
         ForeignKey("categories.category_id", onupdate="CASCADE"),
         primary_key=True,
     )
+    is_deleted = Column(Boolean, default=False)
+    deleted_at = Column(TIMESTAMP)
+    deleted_by = Column(Integer, ForeignKey("users.user_id", onupdate="CASCADE"))
+
+
+class MedicineUseCase(Base):
+    __tablename__ = "medicine_use_cases"
+
+    medicine_id = Column(
+        Integer,
+        ForeignKey("medicines.medicine_id", onupdate="CASCADE"),
+        primary_key=True,
+    )
+    use_case_id = Column(
+        Integer,
+        ForeignKey("use_cases.use_case_id", onupdate="CASCADE"),
+        primary_key=True,
+    )
+
     is_deleted = Column(Boolean, default=False)
     deleted_at = Column(TIMESTAMP)
     deleted_by = Column(Integer, ForeignKey("users.user_id", onupdate="CASCADE"))
