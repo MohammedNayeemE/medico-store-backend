@@ -1,21 +1,34 @@
+import hashlib
 from typing import Any, Dict, List, Optional
 
-import numpy as np
-from sqlalchemy import and_, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.inventory_management_models import Medicine, MedicineUseCase, UseCase
+from app.services.cache_service import CacheService
 from app.services.embedding_service import embedding_service
 from app.utils.preprocessor import extract_symptoms_from_query, symptoms_to_use_cases
 
 
 class RecommendationService:
     def __init__(self) -> None:
-        pass
+        self.cache_service = CacheService()
+
+    def _hash_query(self, query: str) -> str:
+        return hashlib.sha256(query.lower().strip().encode()).hexdigest()[:16]
+
+    def _recommendation_key(self, query_hash: str) -> str:
+        return f"recommendation:{query_hash}"
+
+    def _embed_key(self, query_hash: str) -> str:
+        return f"embedding:candidates:{query_hash}"
+
+    def _medicine_payload_key(self, med_id: int) -> str:
+        return f"medicine:{med_id}:payload"
 
     async def _fetch_medicines_by_use_cases(
-        self, session: AsyncSession, use_cases: List[str]
+        self, db: AsyncSession, use_cases: List[str]
     ):
         if not use_cases:
             return []
@@ -33,7 +46,7 @@ class RecommendationService:
             .where(func.lower(UseCase.use_case).in_(uc_lower))
             .where(Medicine.is_deleted == False)
         )
-        q = await session.execute(stmt)
+        q = await db.execute(stmt)
         meds = q.scalars().unique().all()
         return meds
 
@@ -74,89 +87,147 @@ class RecommendationService:
         matched_use_cases: List[str],
         embed_score: Optional[float] = None,
     ) -> Dict[str, Any]:
-        """
-        Scoring rules (tunable):
-        - +2 per matched use_case present in medicine use_cases (we'll inspect length)
-        - +1 per matched tag overlap (if tag names appear in query/usecases)
-        - -0.5 per side effect present (to penalize)
-        - +0.01 * stock
-        - optional: add embedding similarity weight
-        """
         score = 0.0
         reasons = []
-        # use case match count: we assume medicine.use_cases is loaded if available
-        med_use_cases = base_payload.get(
-            "categories", []
-        )  # fallback if use_cases not loaded; ideally fetch use_cases
-        # but we will use tags and description instead:
-        # simple heuristic: if any use case string is present in tags or description -> count
+        # -----------------------------------
+        # 1. Use-case match (strongest signal)
+        # -----------------------------------
+        # try both tags + categories + name + description
+        use_case_strength = 2.5  # previously 2.0
         for uc in matched_use_cases:
             uc_lower = uc.lower()
             in_tags = any(uc_lower in t.lower() for t in base_payload.get("tags", []))
-            in_name_or_descr = (
-                base_payload.get("medicine_name")
-                and uc_lower in (base_payload.get("medicine_name") or "").lower()
-            ) or (
-                base_payload.get("description")
-                and uc_lower in (base_payload.get("description") or "").lower()
+            in_categories = any(
+                uc_lower in c.lower() for c in base_payload.get("categories", [])
             )
-            if in_tags or in_name_or_descr:
-                score += 2.0
-                reasons.append(f"matches use case '{uc}' in tags/description")
-        # tag overlap (example: if use_case words appear in tags)
-        # small boost for tags count
-        score += 0.1 * len(base_payload.get("tags", []))
-        # side-effect penalty
-        se_count = len(base_payload.get("side_effects", []))
-        score -= 0.5 * se_count
+            in_name = uc_lower in (base_payload.get("medicine_name") or "").lower()
+            in_descr = uc_lower in (base_payload.get("description") or "").lower()
+            if in_tags or in_categories or in_name or in_descr:
+                score += use_case_strength
+                reasons.append(f"use-case matched: '{uc}'")
+        # -----------------------------------
+        # 2. Tag quality scoring
+        # -----------------------------------
+        # good tags → small boosts (max 1.5)
+        tag_count = len(base_payload.get("tags", []))
+        score += min(tag_count * 0.15, 1.5)
+        if tag_count > 0:
+            reasons.append(f"tag relevance +{min(tag_count * 0.15, 1.5):.2f}")
+        # -----------------------------------
+        # 3. Category relevance (boost)
+        # -----------------------------------
+        category_count = len(base_payload.get("categories", []))
+        score += min(category_count * 0.25, 2.0)
+        if category_count > 0:
+            reasons.append(f"category relevance +{min(category_count * 0.25, 2.0):.2f}")
+        # -----------------------------------
+        # 4. Side-effect penalty (smarter)
+        # -----------------------------------
+        se_list = base_payload.get("side_effects", [])
+        se_count = len(se_list)
+        # mild side effects → -0.2 each
+        # severe side effects → -1 each (if you want severity-based scoring later)
+        penalty = se_count * 0.3 * -1
+        score += penalty
         if se_count:
-            reasons.append(f"penalized for {se_count} side effects")
-        # stock add small weight
-        stock = base_payload.get("stock", 0) or 0
-        score += 0.01 * stock
+            reasons.append(
+                f"side-effect penalty {penalty:.2f} ({se_count} side effects)"
+            )
+        # -----------------------------------
+        # 6. Embedding similarity (strong signal)
+        # -----------------------------------
         if embed_score is not None:
-            score += (
-                float(embed_score) * 3.0
-            )  # weight of embedding similarity (tunable)
-            reasons.append(f"embedding similarity {embed_score:.3f}")
-        return {"score": float(score), "reasons": reasons}
+            # normalize embeddings (0–1 → weight 5)
+            embed_weight = embed_score * 5.0
+            score += embed_weight
+            reasons.append(f"semantic similarity boost +{embed_weight:.2f}")
+        # -----------------------------------
+        # Final
+        # -----------------------------------
+        return {
+            "score": round(float(score), 3),
+            "reasons": reasons,
+        }
 
     async def RECOMMEND(
         self,
         query: str,
-        session: AsyncSession,
-        use_embedding: bool = False,
+        db: AsyncSession,
         top_k: int = 10,
+        embedding_candidates: int = 100,
     ):
-        sym_matches = extract_symptoms_from_query(query)
-        matched_symptoms = [s for s, sc in sym_matches]
-        matched_use_cases = symptoms_to_use_cases(matched_symptoms)
-        meds = await self._fetch_medicines_by_use_cases(session, matched_use_cases)
-        payloads = []
-        for m in meds:
-            payload = self._build_medicine_payload(m)
-            payloads.append((m.medicine_id, payload))
-        embed_scores = {}
-        if use_embedding:
+        query_hash = self._hash_query(query)
+        recommendation_key = self._recommendation_key(query_hash)
+        cached_result = await self.cache_service.get_cache(recommendation_key)
+        if cached_result:
+            return cached_result
+        emb_key = self._embed_key(query_hash)
+        embeded_results = await self.cache_service.get_cache(emb_key)
+        if embeded_results:
+            embeded_scores = {medicine_id: sim for medicine_id, sim in embeded_results}
+            candidate_ids = list(embeded_scores.keys())
+        else:
             try:
                 if not embedding_service.medicine_embeddings:
-                    await embedding_service.build_index_from_db(session)
-                embed_results = embedding_service.query_similar(query, top_k=500)
-                embed_scores = {mid: sim for mid, sim in embed_results}
+                    await embedding_service.build_index_from_db(db)
+
+                embeded_results = embedding_service.query_similar(
+                    query, top_k=embedding_candidates
+                )
+                embeded_scores = {
+                    medicine_id: sim for medicine_id, sim in embeded_results
+                }
+                candidate_ids = list(embeded_scores.keys())
+                await self.cache_service.set_cache(emb_key, embeded_results, ttl=1800)
+                if not candidate_ids:
+                    return {"error": "No semantic medicines found"}
             except Exception as e:
-                print("Embedding service error:", e)
-                embed_scores = {}
-        scored = []
-        for mid, payload in payloads:
-            embed_score = embed_scores.get(mid)
-            scobj = self._score_medicine(payload, matched_use_cases, embed_score)
-            payload["score"] = scobj["score"]
-            payload["reason"] = scobj["reasons"]
-            scored.append(payload)
-        scored_sorted = sorted(scored, key=lambda x: x["score"], reverse=True)
-        return {
+                print(f"Embedding Error : {e}")
+                return {"error": "embedding failure"}
+        stmt = (
+            select(Medicine)
+            .options(
+                selectinload(Medicine.tags),
+                selectinload(Medicine.categories),
+                selectinload(Medicine.side_effects),
+                selectinload(Medicine.alternatives),
+            )
+            .where(Medicine.medicine_id.in_(candidate_ids))
+            .where(Medicine.is_deleted == False)
+        )
+        result = await db.execute(stmt)
+        medicines = result.scalars().unique().all()
+        symptom_matches = extract_symptoms_from_query(query)
+        matched_symptoms = [s for s, _ in symptom_matches]
+        matched_use_cases = symptoms_to_use_cases(matched_symptoms)
+        medicine_scores: List[Dict] = []
+        for medicine in medicines:
+            payload_key = self._medicine_payload_key(medicine.medicine_id)
+            cached_payload = await self.cache_service.get_cache(payload_key)
+            if cached_payload:
+                payload = cached_payload
+            else:
+                payload = self._build_medicine_payload(medicine)
+                await self.cache_service.set_cache(
+                    payload_key,
+                    payload,
+                    ttl=86400,  # 24 hrs
+                )
+            embed_score = embeded_scores.get(medicine.medicine_id)
+            score_obj = self._score_medicine(payload, matched_use_cases, embed_score)
+            payload["score"] = score_obj["score"]
+            payload["reasons"] = score_obj["reasons"]
+            medicine_scores.append(payload)
+        sorted_scores = sorted(medicine_scores, key=lambda x: x["score"], reverse=True)
+        final_response = {
             "query": query,
             "matched_symptoms": matched_symptoms,
             "matched_use_cases": matched_use_cases,
-            "recommendations": scored_sorted[:top_k],
+            "recommendations": sorted_scores[:top_k],
         }
+        await self.cache_service.set_cache(
+            recommendation_key,
+            final_response,
+            ttl=3600,  # 1 hour
+        )
+        return final_response

@@ -1,10 +1,10 @@
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Security
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependecies.auth import get_current_user
 from app.api.dependecies.get_db_sessions import get_postgres
 from app.core.exceptions import BadRequestException
 from app.models.user_management_models import User
+from app.schemas.recommendation_schemas import RecommendationQuery
 from app.services.recommendation_service import RecommendationService
 
 router = APIRouter(prefix="/recommendations", tags=["Recommendations"])
@@ -13,28 +13,25 @@ rc_service = RecommendationService()
 
 @router.post("/")
 async def recommend_endpoint(
-    payload: dict = Body(...), session: AsyncSession = Depends(get_postgres)
+    payload: RecommendationQuery = Body(...),
+    session: AsyncSession = Depends(get_postgres),
 ):
     """
     ```
     Request body expected:
     {
       "query": "I have fever and body pain",
-      "use_embedding": true,
       "top_k": 10
     }
     ```
     """
-    query = payload.get("query")
+    query = payload.query
     if not query:
         raise BadRequestException("query is required")
-    use_embedding = payload.get("use_embedding", False)
-    top_k = int(payload.get("top_k", 10))
-    result = await rc_service.RECOMMEND(
-        query, session, use_embedding=use_embedding, top_k=top_k
-    )
+    top_k = payload.topK
+    result = await rc_service.RECOMMEND(query, session, top_k=top_k)
     recommendations = []
-    for r in result["recommendations"]:
+    for r in result.get("recommendations"):
         recommendations.append(
             {
                 "medicine_name": r["medicine_name"],
@@ -49,7 +46,5 @@ async def recommend_endpoint(
         )
     return {
         "query": result["query"],
-        "matched_symptoms": result["matched_symptoms"],
-        "matched_use_cases": result["matched_use_cases"],
         "recommendations": recommendations,
     }
