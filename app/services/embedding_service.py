@@ -3,16 +3,21 @@ import threading
 from typing import Dict, List, Optional
 
 import numpy as np
+from fastapi import Depends
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
+from app.api.dependecies.get_db_sessions import get_postgres
 from app.models.inventory_management_models import (
     Medicine,
-)  # your SQLAlchemy models module
+    MedicineTag,
+    MedicineUseCase,
+)
 
-MODEL_NAME = "all-MiniLM-L6-v2"  # small & good
+MODEL_NAME = "all-MiniLM-L6-v2"
 _lock = threading.Lock()
 
 
@@ -39,7 +44,14 @@ class EmbeddingService:
         Build in-memory index: key = medicine_id, value = vector
         Use fields: medicine_name + generic_name + description + tags + use cases
         """
-        q = await session.execute(select(Medicine).where(Medicine.is_deleted == False))
+        q = await session.execute(
+            select(Medicine)
+            .options(
+                selectinload(Medicine.tags),
+                selectinload(Medicine.use_cases),
+            )
+            .where(Medicine.is_deleted == False)
+        )
         meds = q.scalars().all()
         texts = []
         ids = []
@@ -74,7 +86,7 @@ class EmbeddingService:
             for mid, vec in zip(ids, vectors):
                 self.medicine_embeddings[mid] = vec
 
-    def query_similar(self, query: str, top_k: int = 20):
+    def query_similar(self, query: str, top_k: int = 10):
         if not self.medicine_embeddings:
             return []
         self.load_model()

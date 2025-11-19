@@ -9,7 +9,7 @@ from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
 from httpx import request
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_session
 from sqlalchemy.orm import selectinload
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -46,6 +46,7 @@ from app.models.inventory_management_models import *
 from app.models.order_management_models import *
 from app.models.user_management_models import *
 from app.services.auth_management.auth_service import AuthService
+from app.services.embedding_service import embedding_service
 
 auth_manager = AuthService()
 app = FastAPI(
@@ -90,13 +91,19 @@ async def startup():
         redis = await init_redis()
         pong = await redis.ping()
         if pong:
-            print("✅ Redis connection established successfully!")
+            print("Redis connection established successfully!")
         else:
             print("Redis ping returned False — check configuration.")
         await FastAPILimiter.init(redis)
         print("Redis connection established")
     except Exception as e:
         print(f"error while connecting to redis : {e}")
+    try:
+        generator = get_postgres()
+        session = await generator.__anext__()
+        await embedding_service.build_index_from_db(session=session)
+    except Exception as e:
+        print(f"error while bulding index db : {e}")
 
 
 @app.on_event("shutdown")
