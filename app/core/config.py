@@ -39,6 +39,6 @@ settings = Settings()
 
 allowed_origins = []
 if settings.DEV:
-    allowed_origins = ["*"]
+    allowed_origins = ["http://localhost:4200"]
 else:
     allowed_origins = [settings.PRODUCTION_URL]

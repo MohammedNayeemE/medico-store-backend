@@ -213,7 +213,7 @@ class AuthService:
     ) -> bool:
         # print(type(self.CAPTCHA_BYPASS))
         if self.CAPTCHA_BYPASS == True:
-            # print("log_here")
+            print("log_here")
             if captcha_token == "false_token":
                 return False
             return True
@@ -291,15 +291,9 @@ class AuthService:
                     "user_id": admin_obj.user_id,
                     "email": admin_obj.email,
                     "session_id": session.session_id,
+                    "access_token": access_token,
+                    "token_type": "bearer",
                 },
-            )
-            response.set_cookie(
-                key="access_token",
-                value=access_token,
-                httponly=True,
-                secure=True,
-                samesite="strict",
-                max_age=self.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
             )
             response.set_cookie(
                 key="refresh_token",
@@ -415,12 +409,12 @@ class AuthService:
             await redis_client.setex(
                 f"otp:{data.phone_number}", expiry_seconds, str(otp)
             )
-            client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
-            message = client.messages.create(
-                body=f"Your verification OTP is {otp}. It will expire in 5 minutes.",
-                from_=settings.TWILIO_PHONE_NUMBER,
-                to=data.phone_number,
-            )
+            # client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+            # message = client.messages.create(
+            #     body=f"Your verification OTP is {otp}. It will expire in 5 minutes.",
+            #     from_=settings.TWILIO_PHONE_NUMBER,
+            #     to=data.phone_number,
+            # )
             print(f"[OTP] Sent {otp} to {data.phone_number} | Twilio SID: ")
             return JSONResponse(
                 status_code=200, content={"msg": "OTP sent successfully"}
@@ -431,7 +425,7 @@ class AuthService:
             raise HTTPException(status_code=500, detail="Failed to send OTP")
 
     async def LOGIN_USER(
-        self, request: Request, user_data: UserCreate, db: AsyncSession
+        self, request: Request, user_data: UserCreate, db: AsyncSession, redis_client
     ):
         try:
             phone_key = f"otp:{user_data.phone_number}"
@@ -449,7 +443,7 @@ class AuthService:
                 new_user = User(
                     phone_number=user_data.phone_number,
                     password_hash="default@password",
-                    role_id=user_data.role_id,
+                    role_id=1,
                 )
                 db.add(new_user)
                 await db.commit()
@@ -469,15 +463,25 @@ class AuthService:
             )
             db.add(session)
             await db.commit()
-            return JSONResponse(
+            response = JSONResponse(
                 status_code=200,
                 content={
                     "access_token": access_token,
                     "refresh_token": refresh_token,
                     "token_type": "bearer",
                     "user_id": user_obj.user_id,
+                    "session_id": session.session_id,
                 },
             )
+            response.set_cookie(
+                key="refresh_token",
+                value=refresh_token,
+                httponly=True,
+                secure=True,
+                samesite="strict",
+                max_age=self.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60,
+            )
+            return response
         except HTTPException:
             raise
         except Exception as e:

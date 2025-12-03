@@ -50,7 +50,6 @@ from app.services.embedding_service import embedding_service
 
 auth_manager = AuthService()
 app = FastAPI(
-    root_path="/api/v1",
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
     openapi_url="/openapi.json",
@@ -67,7 +66,10 @@ def custom_docs():
     return HTMLResponse(content=html_content)
 
 
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1"])
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=["localhost", "localhost:4200", "127.0.0.1", "127.0.0.1:4200"],
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
@@ -119,6 +121,12 @@ async def shutdown():
 @app.get("/", dependencies=[Depends(RateLimiter(times=5, seconds=60))])
 async def get_root():
     return JSONResponse(status_code=200, content={"msg": "the server is running"})
+
+
+@app.options("/{path:path}")
+async def debug_options(request: Request, path: str):
+    print("DEBUG ORIGIN:", request.headers.get("origin"))
+    return JSONResponse({"msg": "debug"})
 
 
 async def login_swagger_admin(
