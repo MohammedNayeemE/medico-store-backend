@@ -302,7 +302,6 @@ class AuthService:
                 secure=True,
                 samesite="strict",
                 max_age=self.ACCESS_TOKEN_EXPIRE_MINUTES * 24 * 60,
-                path="/auth/refresh",
             )
             return response
         except HTTPException:
@@ -698,6 +697,7 @@ class AuthService:
         try:
             refresh_token = request.cookies.get("refresh_token")
             if not refresh_token:
+                print(refresh_token)
                 raise HTTPException(status_code=401, detail="missing refresh token")
             try:
                 payload = await self.verify_token(
@@ -707,9 +707,11 @@ class AuthService:
                 )
                 jti = payload.get("jti")
             except JWTError:
+                print("invalid token")
                 raise HTTPException(status_code=401, detail="incalid token")
             # print(jti)
             if await self.is_token_revoked(db=db, jti=jti):
+                print("token revoked")
                 raise HTTPException(
                     status_code=401, detail="token is revoked pls log in"
                 )
@@ -718,12 +720,14 @@ class AuthService:
             )
             session_obj = result.scalar_one_or_none()
             if not session_obj or session_obj.is_revoked == True:
+                print("session revoked")
                 raise HTTPException(
                     status_code=401, detail="the session has already expired"
                 )
             print("=========================")
             print(session_obj.expires_at, datetime.now(timezone.utc))
             if session_obj.expires_at < datetime.now(timezone.utc):
+                print("session expiry time")
                 raise HTTPException(
                     status_code=401, detail="the session has already expired"
                 )
@@ -759,7 +763,7 @@ class AuthService:
             )
             response.set_cookie(
                 key="refresh_token",
-                value=refresh_token,
+                value=new_refresh_token,
                 httponly=True,
                 secure=True,
                 samesite="strict",

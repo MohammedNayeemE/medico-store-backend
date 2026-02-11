@@ -333,7 +333,7 @@ async def onboard_employee(
 
 
 @router.post("/logout", description="Logout users revoke the active session/token")
-async def admin_logout(
+async def logout(
     request: Request,
     token: str = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_postgres),
@@ -825,66 +825,6 @@ async def user_login(
 async def refresh_token(
     request: Request,
     db: AsyncSession = Depends(get_postgres),
-    current_user=Security(get_current_user, scopes=["auth:write"]),
 ):
-    """
-    Refresh the access token using a valid refresh token.
-
-    This endpoint generates a new access token using a valid refresh token. The refresh
-    token is obtained from the request cookies and validated. If valid, a new access
-    token is issued and returned. This allows users to maintain their session without
-    re-authenticating when the access token expires.
-
-    Args:
-        request (Request): The FastAPI request object containing cookies with the
-                          refresh token.
-        db (AsyncSession): Database session dependency for validating refresh tokens
-                          and sessions. Defaults to Depends(get_postgres).
-        current_user: The currently authenticated user, obtained from the access token.
-                     Requires "auth:write" permission. Note: This might seem redundant,
-                     but it ensures the user is authenticated.
-
-    Returns:
-        JSONResponse: A JSON response containing:
-                     - access_token (str): New JWT access token
-                     - token_type (str): Token type, typically "bearer"
-                     - Optional: refresh_token (str): New refresh token (if rotated)
-
-    Raises:
-        HTTPException (401): If the refresh token is invalid, expired, or revoked.
-        HTTPException (403): If the user doesn't have "auth:write" permission.
-        HTTPException (404): If the refresh token is not found in cookies.
-        HTTPException (500): If there's an internal server error during token refresh.
-
-    Security:
-        - Refresh token is validated before issuing new access token
-        - Refresh token must be valid and not revoked
-        - Session associated with refresh token is verified
-        - New access token has a new expiration time
-        - Refresh tokens may be rotated for enhanced security
-
-    Example Request:
-        ```
-        POST /auth/refresh
-        Cookie: refresh_token=<refresh_token>
-        Authorization: Bearer <expired_access_token>
-        ```
-
-    Example Response:
-        ```json
-        {
-            "access_token": "eyJ...",
-            "token_type": "bearer"
-        }
-        ```
-
-    Note:
-        - The refresh token is obtained from request cookies
-        - Refresh token must be valid and not expired
-        - New access token is issued with a new expiration time
-        - Refresh tokens may be rotated (old one invalidated, new one issued)
-        - Access token expiration is typically shorter than refresh token
-        - Use this endpoint when the access token expires
-    """
     result = await auth.REFRESH_TOKEN(db=db, request=request)
     return result

@@ -48,6 +48,7 @@ from app.models.user_management_models import *
 from app.services.auth_management.auth_service import AuthService
 from app.services.embedding_service import embedding_service
 
+# FIX: fix this
 auth_manager = AuthService()
 app = FastAPI(
     title=settings.APP_NAME,
